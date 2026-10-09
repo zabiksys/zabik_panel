@@ -1,0 +1,32 @@
+# These are some examples of commonly ignored file patterns.
+# You should customize this list as applicable to your project.
+# Learn more about .gitignore:
+#     https://www.atlassian.com/git/tutorials/saving-changes/gitignore
+
+# Compiled Python bytecode
+*.py[cod]
+*.egg-info
+
+# Log files
+*.log
+
+# Entorno local — nunca commitear el .env real (plantilla: .env_dist)
+.env
+
+__pycache__
+.secrets.yaml
+
+# config: versionar la estructura, no el contenido
+/config/*
+!/config/.gitkeep
+!/config/panelindexcache/
+/config/panelindexcache/*
+!/config/panelindexcache/.gitkeep
+
+# Google OAuth client credentials — nunca commitear
+client_secret_*.json
+application/pages/export_items/oauth
+/**/.ipynb_checkpoints
+# notebooks: versionar solo los archivos de primer nivel, no subdirectorios
+notebooks/*/
+notebooks/AGENTS.md

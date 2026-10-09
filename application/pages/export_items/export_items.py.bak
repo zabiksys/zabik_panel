@@ -1,0 +1,1286 @@
+"""Exportar artículos de Navision a Excel y Google Drive (per-user OAuth)."""
+from anyio.functools import lru_cache
+from collections import OrderedDict
+from collections.abc import Iterator
+from dataclasses import dataclass, field, fields
+from datetime import datetime, date
+from decimal import Decimal
+from enum import Enum
+from functools import lru_cache, partial
+from io import BytesIO
+import traceback
+from typing import Annotated, Any, Callable
+from urllib.parse import quote
+
+from application.config.config import Config
+from application.config.gdrive_oauth import get_authorization_url, get_credentials
+from application.config.gdrive_token_store import delete_token
+from my_panel_extensions.site import site
+import pandas as pd
+import panel as pn
+import param
+from pydantic import BaseModel, Field
+from pydantic.fields import FieldInfo
+from .repository.navision_backend import NavisionBackend
+from sqlalchemy import create_engine, text, Row
+from sqlalchemy.orm import Session
+from template import MyMaterialTemplate
+
+
+pn.extension('tabulator')
+
+APPLICATION_NAME = 'Panel - Exportar producto'
+APPLICATION = site.create_application(
+    url='export_items',
+    name=APPLICATION_NAME,
+    description='Exporta artículos de Navision a Excel y Google Drive.',
+    description_long=__doc__,
+    thumbnail='/assets/images/thumbnails/manage_apps.png',
+    tags=['comercial'],
+)
+FEATURE_PROFILE = 'PRODUCTO'
+
+def custom_field(
+        en: str, es: str,
+        formatter: dict | None = None,
+        ) -> field:
+    metadata = {'title': {'en': en, 'es': es}}
+    if formatter:
+        metadata['formatter'] = formatter
+    return field(default=None, metadata=metadata)
+
+
+class CrossRefType(Enum):
+    CUSTOMER = 1
+    VENDOR = 2
+    BARCODE = 3
+
+
+class UOMState(Enum):
+    _ = 0
+    INVENTED = 1
+    EXPECTED = 2
+    VERIFIED = 3
+    SHIPMARKS = 4
+
+
+@dataclass
+class Title:
+    en: str
+    es: str
+
+
+@dataclass
+class Price:
+    code: Annotated[str, Title(
+        en='Code', es='Código')]
+    price: Annotated[float, Title(
+        en='Price', es='Precio')]
+        # formatter={'type': 'money', 'decimal': ',',
+        #             'precision': 2, 'thousand': '.',
+        #             'symbol': '€', 'align': 'right'})
+
+
+@dataclass
+class UnitOfMeasure:
+    code: Annotated[str, Title(
+        en='Code', es='Código')]
+    qty_per_unit_of_measure: Annotated[float, Title(
+        en='Qty. per Unit of Measure', es='Cdad. por unidad de medida')]
+    height: Annotated[float, Title(
+        en='Height', es='Alto')]
+    width: Annotated[float, Title(
+        en='Width', es='Ancho')]
+    length: Annotated[float, Title(
+        en='Length', es='Largo')]
+    cubage: Annotated[float, Title(
+        en='Cubage', es='Cubicaje')]
+    weight: Annotated[str, Title(
+        en='Weight', es='Peso')]
+    state: Annotated[str, Title(
+        en='State', es='Estado')]
+
+
+class FeatureDataType(Enum):
+    INTEGER = 0
+    DECIMAL = 1
+    TEXT = 2
+    DATE = 3
+    BOOLEAN = 4
+    OPTION = 5
+
+
+@dataclass
+class Feature:
+    title: str
+    value: Any
+
+
+@dataclass
+class FeatureAnswer:
+    description: str
+    line_no_: int
+
+
+@dataclass
+class FeatureQuestion:
+    description: str
+    line_no_: int
+    multiple_answers: bool
+    data_type: FeatureDataType
+    answers: list[FeatureAnswer]
+
+
+@dataclass
+class ExtendedText:
+    code: str
+
+
+def uom_state_mapper(x, locale):
+    return {
+        UOMState._: {'en': '', 'es': ''},
+        UOMState.EXPECTED: {'en': 'Expected', 'es': 'Previsto'},
+        UOMState.INVENTED: {'en': 'Invented', 'es': 'Inventado'},
+        UOMState.SHIPMARKS: {'en': 'Shipmarks', 'es': 'Shipmarks'},
+        UOMState.VERIFIED: {'en': 'Verified', 'es': 'Verificado'}
+        }[x][locale]
+
+
+@dataclass
+class Origin:
+    process: Callable[[Session, Row], Any]
+    formatter: dict | None = None
+    column_list: list[str] = field(default_factory=list)
+
+
+@dataclass
+class FeatureQuestions:
+    questions: OrderedDict[int, FeatureQuestion]
+
+
+def get_feature_questions(session, nav_company: str) -> OrderedDict[int, FeatureQuestion]:
+    sql = text(f"""SELECT feat.Type type,
+            feat.Description description,
+            feat.[Line No_] line_no_,
+            feat.[Multiple Answers] multiple_answers,
+            feat.[Data Type] data_type
+        FROM [{nav_company}$Feature] feat
+        WHERE
+            feat.[Profile Code] = :profile_code
+        ORDER BY feat.[Line No_]""")
+    feature_questions: list[tuple[int, FeatureQuestion]] = []
+    for row in session.execute(sql, {'profile_code': FEATURE_PROFILE}):
+        if row.type == 0:  # question
+            feature_questions.append((row.line_no_, FeatureQuestion(
+                line_no_=row.line_no_,
+                description=row.description,
+                multiple_answers=row.multiple_answers,
+                answers=[],
+                data_type=FeatureDataType(row.data_type))))
+        elif row.type == 1:  # answer
+            feature_questions[-1][1].answers.append(
+                FeatureAnswer(description=row.description, line_no_=row.line_no_))
+    return OrderedDict(feature_questions)
+
+
+def get_feature_questionnaire(session, nav_company: str, item: Row) -> list[Feature]:
+    if not (questions := get_field_feature_questions()):
+        questions=FeatureQuestions(questions=get_feature_questions(session, nav_company))
+        set_field_feature_questions(questions)
+        
+    sql = text(f"""SELECT
+        [Line No_] line_no_,
+        [Data Type] data_type,
+        [Feature Integer] feature_integer,
+        [Feature Decimal] feature_decimal,
+        [Feature Text] feature_text,
+        [Feature Date] feature_date,
+        [Feature Boolean] feature_boolean
+    FROM [{nav_company}$Feature Questionnaire]
+    WHERE [Profile Code] = :profile_code
+        AND No_ = :item_no_
+    ORDER BY [Line No_]""")
+    questionnaire: list[Feature] = []
+    for row in session.execute(sql, {'profile_code': FEATURE_PROFILE, 'item_no_': item.no_}):
+        print('row', row)
+        data_type = FeatureDataType(row.data_type)
+        if data_type == FeatureDataType.OPTION:
+            pass
+        else:
+            match data_type:
+                case FeatureDataType.BOOLEAN:
+                    value = row.feature_boolean
+                case FeatureDataType.DATE:
+                    value = row.feature_date
+                case FeatureDataType.DECIMAL:
+                    value = float(row.feature_decimal)
+                case FeatureDataType.INTEGER:
+                    value = row.feature_integer
+                case FeatureDataType.TEXT:
+                    value = row.feature_text
+            questionnaire.append(
+                Feature(title=questions.questions[row.line_no_].description, value=value))
+    return questionnaire
+
+
+class ItemModel(BaseModel):
+    no_: Annotated[str, Title(en='No.', es='Nº'), Origin(column_list=['item.No_ no_'], process=lambda _s, _n, r: r.no_)]
+    description: Annotated[str | None, Field(default=None), Title(
+        en='Description', es='Descripción'), Origin(column_list=['item.Description description'], process=lambda _s, _n, r: r.description)]
+    description_2: Annotated[str | None, Field(default=None), Title(
+        en='Description 2', es='Descripción 2')]
+    item_line_code: Annotated[str | None, Field(default=None), Title(
+        en='Item Line Code', es='Cód. línea prod.')]
+    item_line_name: Annotated[str | None, Field(default=None), Title(
+        en='Item Line Name', es='Nombre línea prod.')]
+    npd_code: Annotated[str | None, Field(default=None), Title(
+        en='NPD Code', es='Cód. NPD')]
+    npd_name: Annotated[str | None, Field(default=None), Title(
+        en='NPD Name', es='Nombre NPD')]
+    division_code: Annotated[str | None, Field(default=None), Title(
+        en='Division Code', es='Cód. división')]
+    division_name: Annotated[str | None, Field(default=None), Title(
+        en='Division Name', es='Nombre división')]
+    life_cycle_code: Annotated[str | None, Field(default=None), Title(
+        en='Life Cycle Code', es='Cód. ciclo vida')]
+    life_cycle_name: Annotated[str | None, Field(default=None), Title(
+        en='Life Cycle Name', es='Nombre ciclo vida')]
+    campaign_code: Annotated[str | None, Field(default=None), Title(
+        en='Campaign Code', es='Cód. campaña')]
+    campaign_name: Annotated[str | None, Field(default=None), Title(
+        en='Campaign Name', es='Nombre campaña')]
+    state: Annotated[str | None, Field(default=None), Title(
+        en='State', es='Estado')]
+    blocked: Annotated[bool | None, Field(default=None), Title(
+        en='Blocked', es='Bloqueado')]
+    report_order: Annotated[int | None, Field(default=None), Title(
+        en='Report Order', es='Orden de informe')]
+    blocked___quot__ord__sales_: Annotated[bool | None, Field(default=None), Title(
+        en='Blocked - Quot./Ord. (Sales)', es='Bloq. - of./ped. (venta)')]
+    ean_no_: Annotated[str | None, Field(default=None), Title(
+        en='EAN No.', es='Nº EAN')]
+    dun14_no_: Annotated[str | None, Field(default=None), Title(
+        en='DUN14 No.', es='Nº DUN14')]
+    vendor_item_no_: Annotated[str | None, Field(default=None), Title(
+        en='Vendor Item No.', es='Nº producto proveedor')]
+    vendor_item_description: Annotated[str | None, Field(default=None), Title(
+        en='Vendor Item Description', es='Producto descripción proveedor')]
+    sales_order_multiple: Annotated[float | None, Field(default=None), Title(
+        en='Sales Order Multiple', es='Múltiplo pedido venta')]
+    unit_volume: Annotated[float | None, Field(default=None), Title(
+        en='Unit Volume', es='Volumen')]
+    royalty__: Annotated[float | None, Field(default=None), Title(
+        en='Royalty %', es='% royalty')]
+    vendor_no_: Annotated[str | None, Field(default=None), Title(
+        en='Vendor No.', es='Nº proveedor')]
+    price_a: Annotated[float | None, Field(default=None), Title(
+        en='Price A', es='Precio A')]
+    price_b: Annotated[float | None, Field(default=None), Title(
+        en='Price B', es='Precio B')]
+    price_i: Annotated[float | None, Field(default=None), Title(
+        en='Price I', es='Precio I')]
+    price_p: Annotated[float | None, Field(default=None), Title(
+        en='Price P', es='Precio P')]
+    price_ddp: Annotated[float | None, Field(default=None), Title(
+        en='Price DDP', es='Precio DDP')]
+    price_r: Annotated[float | None, Field(default=None), Title(
+        en='Price R', es='Precio R')]
+    tariff_no_: Annotated[str | None, Field(default=None), Title(
+        en='Tariff No.', es='Cód. arancelario')]
+    unit_of_measures: Annotated[list[UnitOfMeasure] | None, Field(default=None), Title(
+        en='Unit of Measures', es='Unidades de medida')]
+    std_quantity: Annotated[float | None, Field(default=None), Title(
+        en='STD Quantity', es='STD Cantidad')]
+    std_height: Annotated[float | None, Field(default=None), Title(
+        en='STD Height', es='STD Alto')]
+    std_width: Annotated[float | None, Field(default=None), Title(
+        en='STD Width', es='STD Ancho')]
+    std_length: Annotated[float | None, Field(default=None), Title(
+        en='STD Length', es='STD Largo')]
+    std_cubage: Annotated[float | None, Field(default=None), Title(
+        en='STD Cubage', es='STD Cubicaje')]
+    std_weight: Annotated[float | None, Field(default=None), Title(
+        en='STD Weight', es='STD Peso')]
+    std_state: Annotated[UOMState | None, Field(default=None), Title(
+        en='STD State', es='STD Estado')]
+    uds_height: Annotated[float | None, Field(default=None), Title(
+        en='UDS Height', es='UDS Alto')]
+    uds_width: Annotated[float | None, Field(default=None), Title(
+        en='UDS Width', es='UDS Ancho')]
+    uds_length: Annotated[float | None, Field(default=None), Title(
+        en='UDS Length', es='UDS Largo')]
+    uds_cubage: Annotated[float | None, Field(default=None), Title(
+        en='UDS Cubage', es='UDS Cubicaje')]
+    uds_weight: Annotated[float | None, Field(default=None), Title(
+        en='UDS Weight', es='UDS Peso')]
+    uds_state: Annotated[UOMState | None, Field(default=None), Title(
+        en='UDS State', es='UDS Estado')]
+    product_height: Annotated[float | None, Field(default=None), Title(
+        en='PRODUCTO Height', es='PRODUCTO Alto')]
+    product_width: Annotated[float | None, Field(default=None), Title(
+        en='PRODUCTO Width', es='PRODUCTO Ancho')]
+    product_length: Annotated[float | None, Field(default=None), Title(
+        en='PRODUCTO Length', es='PRODUCTO Largo')]
+    product_weight: Annotated[float | None, Field(default=None), Title(
+        en='PRODUCTO Weight', es='PRODUCTO Peso')]
+    product_state: Annotated[UOMState | None, Field(default=None), Title(
+        en='PRODUCTO State', es='PRODUCTO Estado')]
+    pallet_quantity: Annotated[float | None, Field(default=None), Title(
+        en='PALET Quantity', es='PALET Cantidad')]
+    pallet_height: Annotated[float | None, Field(default=None), Title(
+        en='PALET Height', es='PALET Alto')]
+    pallet_cubage: Annotated[float | None, Field(default=None), Title(
+        en='PALET Cubage', es='PALET Cubicaje')]
+    pallet_weight: Annotated[float | None, Field(default=None), Title(
+        en='PALET Weight', es='PALET Peso')]
+    pallet_layers: Annotated[float | None, Field(default=None), Title(
+        en='PALET Layers', es='PALET Capas')]
+    pallet_qty__per_layer: Annotated[float | None, Field(default=None), Title(
+        en='PALET Qty. per Layer', es='PALET Cdad. por capa')]
+    pallet_state: Annotated[UOMState | None, Field(default=None), Title(
+        en='PALET State', es='PALET Estado')]
+    cont20_quantity: Annotated[float | None, Field(default=None), Title(
+        en='CONT20 Quantity', es='CONT20 Cantidad')]
+    cont40_quantity: Annotated[float | None, Field(default=None), Title(
+        en='CONT40 Quantity', es='CONT40 Cantidad')]
+    cont40h_quantity: Annotated[float | None, Field(default=None), Title(
+        en='CONT40H Quantity', es='CONT40H Cantidad')]
+    features: Annotated[list[Feature] | None, Field(default=None), Title(
+        en='Features', es='Características'), Origin(column_list=['item.No_ no_'], process=get_feature_questionnaire)]
+    extended_text: Annotated[list[ExtendedText] | None, Field(default=None), Title(
+        en='Extended Text', es='Texto extendido')]
+
+    
+def get_expanded_fields(field_names: list[str], locale: str) -> list[tuple[str, str]]:
+    result = []
+    for field_name, field_info in ItemModel.model_fields.items():
+        if field_name in field_names:
+            expandable = None
+            for metadata in field_info.metadata:
+                if isinstance(metadata, Title):
+                    title = getattr(metadata, locale)
+                if isinstance(metadata, FeatureQuestions):
+                    expandable = [(f'{field_name}.question_{q.line_no_}', q.description) for q in metadata.questions]
+            if expandable:
+                result += expandble
+            else:
+                result.append((field_name, title))
+                
+    return result
+        
+    
+def get_field_value(item: ItemModel, field_name: str) -> Any:
+    if '.' in field_name:
+        parts = field_name.split('.')
+        field_value = getattr(item, parts[0])
+
+        pass
+    else:
+        return getattr(item, field_name)
+
+
+def get_field_title(field_name: str, locale: str) -> str:
+    for metadata in ItemModel.model_fields.get(field_name).metadata:
+        if isinstance(metadata, Title):
+            return getattr(metadata, locale, None)
+
+
+def get_field_formatter(field_name: str) -> dict | None:
+    for metadata in ItemModel.model_fields.get(field_name).metadata:
+        if isinstance(metadata, Origin):
+            return getattr(metadata, 'formatter', None)
+
+
+def get_field_feature_questions() -> FeatureQuestions | None:
+    for metadata in ItemModel.model_fields['features'].metadata:
+        if isinstance(metadata, FeatureQuestions):
+            return metadata
+    
+
+def set_field_feature_questions(feature_questions: FeatureQuestions) -> None:
+    ItemModel.model_fields['features'].metadata.append(feature_questions)
+
+
+def get_items(engine, nav_company, *, use_fields: list[str], conditions: list[str], params: dict[str, str]) -> Iterator[ItemModel]:
+    column_list: list[str] = []
+    process: dict[str, Callable] = {}
+    for field_name in use_fields:
+        field_info = ItemModel.model_fields.get(field_name)
+        for metadata in field_info.metadata:
+            if isinstance(metadata, Origin):
+                column_list += metadata.column_list
+                if hasattr(metadata, 'process'):
+                    process[field_name] = metadata.process
+                
+    dependency_cols = set(column_list)
+    where = ' AND '.join(conditions) if conditions else '1=1'
+    sql = text(f"""
+        SELECT
+            {', '.join(dependency_cols)}
+        FROM [{nav_company}$Item] item
+        WHERE {where}
+        ORDER BY item.[Report Order]
+    """)
+    with Session(engine) as session:
+        for row in session.execute(sql, params):
+            item_data = {}
+            for field_name in use_fields:
+                val = process[field_name](session, nav_company, row)
+                item_data = {**item_data, field_name: val}
+            yield ItemModel(**item_data)
+# Yes	PriceA	0	0
+# Yes	PriceB	0	0
+# Yes	PriceI	0	0
+# Yes	PriceP	0	0
+# Yes	PriceDDP	0	0
+# Yes	PriceR	0	0
+# Yes	STDQty	0	0
+# Yes	STDHeight	0	0
+# Yes	STDWidth	0	0
+# Yes	STDLength	0	0
+# Yes	STDCubage	0	0
+# Yes	STDWeight	0	0
+# Yes	STDState	0	0
+# Yes	UDSHeight	0	0
+# Yes	UDSWidth	0	0
+# Yes	UDSLength	0	0
+# Yes	UDSCubage	0	0
+# Yes	UDSWeight	0	0
+# Yes	UDSState	0	0
+# Yes	PRODUCTOHeight	0	0
+# Yes	PRODUCTOWidth	0	0
+# Yes	PRODUCTOLength	0	0
+# Yes	PRODUCTOWeight	0	0
+# Yes	PRODUCTOState	0	0
+# Yes	PALLETQty	0	0
+# Yes	PALLETHeight	0	0
+# Yes	PALLETCubage	0	0
+# Yes	PALLETWeight	0	0
+# Yes	PALLETLayers	0	0
+# Yes	PALLETQtyPerLayer	0	0
+# Yes	PALLETState	0	0
+# Yes	CONT20Qty	0	0
+# Yes	CONT40Qty	0	0
+# Yes	CONT40HQty	0	0
+# Yes	FeatureExportField1+FeatureExportField2	0	0
+# Yes	ExtTextExportField[1]	0	0
+# Yes	ExtTextExportField[2]	0	0
+# Yes	ExtTextExportField[3]	0	0
+# Yes	ExtTextExportField[4]	0	0
+# Yes	ExtTextExportField[5]	0	0
+# Yes	ExtTextExportField[6]	0	0
+# Yes	ExtTextExportField[7]	0	0
+# Yes	ExtTextExportField[8]	0	0
+# Yes	ExtTextExportField[9]	0	0
+# Yes	ExtTextExportField[10]	0	0
+DIMENSION_CTE_TPL = """{name}(No_, Code, Name) AS
+  (SELECT def_dim.No_, def_dim.[Dimension Value Code] Code, dim.Name
+   FROM [{nav_company}$Default Dimension] def_dim INNER JOIN
+        [{nav_company}$Dimension Value] dim ON
+           dim.[Dimension Code] = def_dim.[Dimension Code]
+           AND dim.Code = def_dim.[Dimension Value Code]
+   WHERE
+     def_dim.[Table ID] = 27  /* Item */
+     AND def_dim.[Dimension Code] = '{dim_code}')"""
+
+
+CROSS_REF_CTE_TPL = """{name}([Item No_], No_, Description) AS
+  (SELECT icr.[Item No_], MIN(icr.[Cross-Reference No_]), icr.Description
+   FROM [{nav_company}$Item Cross Reference] icr
+   WHERE icr.[Unit of Measure] = :{name}_unit_of_measure
+     AND icr.[Cross-Reference Type] = :{name}_type
+     AND icr.[Cross-Reference Type No_] = :{name}_type_no_
+     AND icr.[Variant Code] = :{name}_variant_code
+     AND icr.[Main Bar Code] = :{name}_main_bar_code
+   GROUP BY icr.[Item No_])"""
+
+
+@dataclass
+class DimensionSQL:
+    cte: str
+    column_list: str
+    join: str
+    params: dict | None = None
+
+
+class ExportItemsApp(param.Parameterized):
+    """Export items from Navision."""
+
+    get_nav_company = param.Callable()
+    get_nav_dburi = param.Callable()
+    open_modal = param.Callable()
+    close_modal = param.Callable()
+
+    filter_state = param.Selector(objects=['Todos', 'ACTIVO', 'BAJA', 'PARCIAL'], default='ACTIVO')
+    filter_item_line = param.Selector(objects={'Todos': ''}, default='')
+    filter_search = param.String(default='', label='Buscar (No. o Descripción)')
+
+    items_df = param.DataFrame()
+    alerts = param.List(default=[])
+    loading = param.Boolean(default=False)
+    modal_view = param.Parameter()
+
+    _selected_folder_id = param.String(default=None)
+    _gdrive_connected = param.Boolean(default=False)
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        self.repository = NavisionBackend(
+            conn_url=self.get_nav_dburi(),
+            nav_company=params['get_nav_company'](),
+            feature_profile=FEATURE_PROFILE)
+        self._username = self._get_username()
+        self._check_gdrive_connection()
+        self._build_settings_panel()
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _get_username(self) -> str | None:
+        """Extract the authenticated AD username from the Panel session."""
+        try:
+            request = pn.state.curdoc.session_context.request
+            user_cookie = request.cookies.get("user")
+            if user_cookie:
+                import json
+                return json.loads(user_cookie.value)
+        except Exception:
+            pass
+        return None
+
+    def _check_gdrive_connection(self):
+        """Update the connection flag based on the SQLite token store."""
+        if not self._username:
+            self._gdrive_connected = False
+            return
+        creds = get_credentials(self._username)
+        self._gdrive_connected = creds is not None and creds.valid
+
+    # ------------------------------------------------------------------
+    # Settings panel
+    # ------------------------------------------------------------------
+
+    def _build_settings_panel(self):
+        self.line_select = pn.widgets.Select.from_param(
+            self.param.filter_item_line, name='Línea artículo')
+        self.state_select = pn.widgets.Select.from_param(
+            self.param.filter_state, name='Estado')
+        self.search_input = pn.widgets.TextInput.from_param(
+            self.param.filter_search, placeholder='No. o descripción...')
+        self.fetch_button = pn.widgets.Button(
+            name='Obtener artículos', button_type='primary', icon='search',
+            width=200)
+        self.fetch_button.on_click(lambda _: self.fetch_items())
+
+        self.export_button = pn.widgets.Button(
+            name='Exportar a Google Drive', button_type='success',
+            icon='cloud-upload', disabled=True, width=200)
+        self.export_button.on_click(lambda _: self.export_to_drive())
+
+        self.download_button = pn.widgets.FileDownload(
+            callback=self._generate_excel, filename='articulos.xlsx',
+            label='Descargar Excel', button_type='warning',
+            icon='download', disabled=True, width=200)
+
+        # Google Drive connection state
+        self.connect_gdrive_button = pn.widgets.Button(
+            name='Conectar Google Drive', button_type='primary',
+            icon='brand-google-drive', disabled=False, width=200)
+        self.connect_gdrive_button.on_click(lambda _: self._start_gdrive_auth())
+
+        self.disconnect_gdrive_button = pn.widgets.Button(
+            name='Desconectar Google Drive', button_type='danger',
+            icon='plug-x', disabled=False, width=200)
+        self.disconnect_gdrive_button.on_click(lambda _: self._disconnect_gdrive())
+
+        self.settings_panel = pn.Column(
+            pn.pane.Markdown('### Filtros'),
+            self.state_select,
+            self.line_select,
+            self.search_input,
+            pn.Spacer(height=10),
+            self.fetch_button,
+            pn.Spacer(height=10),
+            pn.pane.Markdown('### Google Drive'),
+            self._gdrive_status_widget(),
+            pn.Spacer(height=10),
+            pn.pane.Markdown('### Exportar'),
+            self.export_button,
+            self.download_button,
+        )
+
+    def _gdrive_status_widget(self) -> pn.Column:
+        if self._gdrive_connected:
+            return pn.Column(
+                pn.pane.Alert('Google Drive conectado.', alert_type='success'),
+                self.disconnect_gdrive_button,
+            )
+        else:
+            return pn.Column(
+                pn.pane.Alert(
+                    'Google Drive no conectado. Autoriza a Panel a acceder a tu Google Drive.',
+                    alert_type='warning'),
+                self.connect_gdrive_button,
+            )
+
+    def _start_gdrive_auth(self, *_):
+        if not self._username:
+            self.alerts = [pn.pane.Alert(
+                'No se pudo obtener el usuario. Recarga la página.',
+                alert_type='danger')]
+            return
+        try:
+            url = get_authorization_url(self._username)
+            # Open OAuth URL in a new browser tab using JavaScript
+            js = f"window.open('{url}', '_blank', 'width=600,height=700');"
+            pn.pane.HTML(f"""
+                <script>{js}</script>
+                <p>Se ha abierto la ventana de autorización de Google.
+                Una vez autorices, vuelve aquí y refresca la página.</p>
+            """).servable()
+            self.alerts = [pn.pane.Alert(
+                'Ventana de autorización abierta. Completa el proceso en Google '
+                'y luego pulsa "Actualizar estado" o recarga la página.',
+                alert_type='info')]
+        except Exception as e:
+            self.alerts = [pn.pane.Alert(
+                f'Error al iniciar autorización: {e}', alert_type='danger')]
+
+    def _disconnect_gdrive(self, *_):
+        if self._username:
+            delete_token(self._username)
+        self._gdrive_connected = False
+        self.alerts = [pn.pane.Alert(
+            'Google Drive desconectado.', alert_type='info')]
+
+    # ------------------------------------------------------------------
+    # Fetch items
+    # ------------------------------------------------------------------
+
+    def _load_filter_options(self):
+        sql_categories = text(
+            f"""SELECT DISTINCT Code, [Name]
+            FROM [{self.nav_company}$Dimension Value]
+            WHERE [Dimension Code] = 'LINEA-PROD'
+            ORDER BY Code""")
+        with Session(self.engine) as session:
+            try:
+                lines = {r[1]: r[0] for r in session.execute(sql_categories)}
+            except Exception:
+                lines = {}
+        self.param.filter_item_line.objects = {'Todos': '', **lines}
+
+    def fetch_items(self, *_):
+        self.loading = True
+        self.alerts = []
+        conditions, params = self.get_conditions_and_params()
+        use_fields = self.get_fields()
+        try:
+            self._load_filter_options()
+
+            self.items_df = pd.DataFrame([
+                {field_name: get_field_value(item, field_path) for field_name, field_path in get_expanded_fields(self.get_fields())}
+                for item in get_items(self.engine, self.nav_company, use_fields=use_fields, conditions=conditions, params=params)])
+            self.export_button.disabled = self.items_df.shape[0] == 0 or not self._gdrive_connected
+            self.download_button.disabled = self.items_df.shape[0] == 0
+            self.alerts = [pn.pane.Alert(
+                f'Se encontraron {self.items_df.shape[0]} artículo(s).',
+                alert_type='success')]
+        except Exception as e:
+            self.alerts = [pn.pane.Alert(
+                f'Error al obtener artículos: {e}', alert_type='danger')]
+            traceback.print_exc()
+            self.items_df = None
+        finally:
+            self.loading = False
+
+    def get_conditions_and_params(self) -> tuple[list[str], dict[str, str]]:
+        conditions = []
+        params = {}
+
+        if self.filter_state != 'Todos':
+            conditions.append("item.State = :state")
+            params['state'] = self.filter_state
+
+        if self.filter_item_line != '':
+            conditions.append("item_line.Code = :line")
+            params['line'] = self.filter_item_line
+
+        if self.filter_search.strip():
+            search = f"%{self.filter_search.strip()}%"
+            conditions.append(
+                "(item.No_ LIKE :search OR item.Description LIKE :search)")
+            params['search'] = search
+        return conditions, params
+
+    def get_fields(self) -> list[str]:
+        return ['no_', 'description', 'features']
+    
+    def get_items(self) -> list:
+        conditions = []
+        params = {}
+
+        if self.filter_state != 'Todos':
+            conditions.append("item.State = :state")
+            params['state'] = self.filter_state
+
+        if self.filter_item_line != '':
+            conditions.append("item_line.Code = :line")
+            params['line'] = self.filter_item_line
+
+        if self.filter_search.strip():
+            search = f"%{self.filter_search.strip()}%"
+            conditions.append(
+                "(item.No_ LIKE :search OR item.Description LIKE :search)")
+            params['search'] = search
+
+        ctes = {
+            'item_line': DimensionSQL(
+                cte=DIMENSION_CTE_TPL.format(nav_company=self.nav_company, name='item_line', dim_code='LINEA-PROD'),
+                column_list='item_line.Code item_line_code, item_line.Name item_line_name',
+                join='LEFT OUTER JOIN item_line ON item_line.No_ = item.No_'),
+            'npd': DimensionSQL(
+                cte=DIMENSION_CTE_TPL.format(nav_company=self.nav_company, name='npd', dim_code='NPD'),
+                column_list='npd.Code npd_code, npd.Name npd_name',
+                join='LEFT OUTER JOIN npd ON npd.No_ = item.No_'),
+            'division': DimensionSQL(
+                cte=DIMENSION_CTE_TPL.format(nav_company=self.nav_company, name='division', dim_code='DIVISION'),
+                column_list='division.Code division_code, division.Name division_name',
+                join='LEFT OUTER JOIN division ON division.No_ = item.No_'),
+            'life_cycle': DimensionSQL(
+                cte=DIMENSION_CTE_TPL.format(nav_company=self.nav_company, name='life_cycle', dim_code='CICLO-VIDA'),
+                column_list='life_cycle.Code life_cycle_code, life_cycle.Name life_cycle_name',
+                join='LEFT OUTER JOIN life_cycle ON life_cycle.No_ = item.No_'),
+            'campaign': DimensionSQL(
+                cte=DIMENSION_CTE_TPL.format(nav_company=self.nav_company, name='campaign', dim_code='CAMPAÑA'),
+                column_list='campaign.Code campaign_code, campaign.Name campaign_name',
+                join='LEFT OUTER JOIN campaign ON campaign.No_ = item.No_'),
+            'ean': DimensionSQL(
+                cte=CROSS_REF_CTE_TPL.format(nav_company=self.nav_company, name='ean'),
+                column_list='ean.No_ ean_code',
+                join='LEFT OUTER JOIN ean ON ean.[Item No_] = item.No_',
+                params={'ean_type': CrossRefType.BARCODE.value,
+                        'ean_type_no_': '',
+                        'ean_unit_of_measure': 'UDS',
+                        'ean_variant_code': '',
+                        'ean_main_bar_code': 1}
+            ),
+            'dun14': DimensionSQL(
+                cte=CROSS_REF_CTE_TPL.format(nav_company=self.nav_company, name='dun14'),
+                column_list='dun14.No_ dun14_code',
+                join='LEFT OUTER JOIN dun14 ON dun14.[Item No_] = item.No_',
+                params={'dun14_type': CrossRefType.BARCODE.value,
+                        'dun14_type_no_': '',
+                        'dun14_unit_of_measure': 'STD',
+                        'dun14_variant_code': '',
+                        'dun14_main_bar_code': 1}
+            ),
+            'vendor_item': DimensionSQL(
+                cte=CROSS_REF_CTE_TPL.format(nav_company=self.nav_company, name='vendor_item'),
+                column_list=("ISNULL(NULLIF(item.[Vendor Item No_], ''), vendor_item.No_) vendor_item_no_, "
+                             "ISNULL(NULLIF(item.[Vendor Item No_], ''), vendor_item.Description) vendor_item_description"),
+                join='LEFT OUTER JOIN vendor_item ON vendor_item.[Item No_] = item.No_',
+                params={'vendor_item_type': CrossRefType.VENDOR.value,
+                        'vendor_item_type_no_': 'item.[Vendor No_]',
+                        'vendor_item_unit_of_measure': 'item.[Base Unit of Measure]',
+                        'vendor_item_variant_code': '',
+                        'vendor_item_main_bar_code': 1}
+            ),
+        }
+        use_ctes = ['item_line', 'npd', 'division', 'life_cycle', 'campaign',
+                    'ean', 'dun14', 'vendor_item']
+        for cte in use_ctes:
+            if ctes[cte].params:
+                for k, v in ctes[cte].params.items():
+                    params[k] = v
+
+        def get_dimension(session, item, *, name: str, dim_code: str) -> dict[str, Any]:
+            sql = text(f"""SELECT
+              dim.Code, dim.Name
+            FROM [{self.nav_company}$Default Dimension] def_dim INNER JOIN
+              [{self.nav_company}$Dimension Value] dim ON
+                dim.[Dimension Code] = def_dim.[Dimension Code]
+                AND dim.Code = def_dim.[Dimension Value Code]
+            WHERE
+              def_dim.[Table ID] = 27 /* Item */
+              AND def_dim.No_ = :item_no_
+              AND def_dim.[Dimension Code] = :dim_code""")
+            result = session.execute(sql, {'item_no_': item.no_, 'dim_code': dim_code}).first()
+            if result:
+                return {f'{name}_code': result.Code, f'{name}_name': result.Name}
+            else:
+                return {}
+
+        def get_cross_ref(
+                session,
+                item,
+                *,
+                name: str,
+                unit_of_measure: str | None,
+                cross_ref_type: CrossRefType,
+                type_no_: str,
+                variant_code: str,
+                main_bar_code: bool) -> dict[str, Any]:
+            sql = text(f"""SELECT
+                  icr.[Cross-Reference No_] no_, icr.Description description
+                FROM [{self.nav_company}$Item Cross Reference] icr
+                WHERE icr.[Item No_] = :item_no_
+                  AND (icr.[Unit of Measure] = :unit_of_measure OR :unit_of_measure = NULL)
+                  AND icr.[Cross-Reference Type] = :type
+                  AND icr.[Cross-Reference Type No_] = :type_no_
+                  AND icr.[Variant Code] = :variant_code
+                  AND icr.[Main Bar Code] = :main_bar_code""")
+            params = {'item_no_': item.no_,
+                      'unit_of_measure': unit_of_measure,
+                      'type': cross_ref_type.value,
+                      'type_no_': type_no_,
+                      'variant_code': variant_code,
+                      'main_bar_code': 1 if main_bar_code else 0}
+            result = session.execute(sql, params).first()
+            if result:
+                return {f'{name}_no_': result.no_, f'{name}_description': result.description}
+            else:
+                return {}
+
+        def get_barcode(
+                session,
+                item,
+                *,
+                name: str,
+                unit_of_measure: str,
+                cross_ref_type: CrossRefType,
+                variant_code: str,
+                main_bar_code: bool) -> dict[str, Any]:
+            result = get_cross_ref(
+                    session,
+                    item,
+                    name=name,
+                    unit_of_measure=unit_of_measure,
+                    cross_ref_type=cross_ref_type,
+                    type_no_='',
+                    variant_code=variant_code,
+                    main_bar_code=main_bar_code)
+            if result:
+                return {f'{name}_no_': result[f'{name}_no_']}
+            else:
+                return result
+
+        def get_vendor_item(
+                session,
+                item,
+                *,
+                name: str,
+                unit_of_measure: str | None,
+                cross_ref_type: CrossRefType,
+                variant_code: str,
+                main_bar_code: bool) -> dict[str, Any]:
+            if item.vendor_item_no_:
+                result = {f'{name}_no_': item.vendor_item_no_, f'{name}_description': ''}
+            else:
+                result = get_cross_ref(
+                    session,
+                    item,
+                    name=name,
+                    unit_of_measure=unit_of_measure,
+                    cross_ref_type=cross_ref_type,
+                    type_no_=item.vendor_no_,
+                    variant_code=variant_code,
+                    main_bar_code=main_bar_code)
+            return result
+
+        def get_price(session, item, *, name: str, sales_code: str) -> dict[str, Any]:
+            sql = text(f"""SELECT
+                  sp.[Unit Price] unit_price
+                FROM [{self.nav_company}$Sales Price] sp
+                WHERE sp.[Item No_] = :item_no_
+                  AND sp.[Sales Type] = 1 /* Customer price group */
+                  AND sp.[Sales Code] = :sales_code
+                  AND (sp.[Unit of Measure Code] = :unit_of_measure OR :unit_of_measure = NULL)
+                  AND sp.[Currency Code] = :currency_code
+                  AND sp.[Starting Date] <= :starting_date
+                  AND (sp.[Ending Date] = '1753-01-01' OR sp.[Ending Date] >= :ending_date)
+                  AND sp.[Minimum Quantity] = :minimum_quantity
+                  AND sp.[Variant Code] = :variant_code""")
+            params = {'item_no_': item.no_,
+                      'sales_code': sales_code,
+                      'unit_of_measure': '',
+                      'currency_code': '',
+                      'starting_date': date.today(),
+                      'ending_date': date.today(),
+                      'minimum_quantity': 0,
+                      'variant_code': ''}
+            result = session.execute(sql, params).first()
+            if result:
+                return {f'{name}': float(result.unit_price)}
+            else:
+                return {}
+            
+        def get_unit_of_measure(session, item, *, name: str, code: str) -> dict[str, Any]:
+            sql = text(f"""SELECT
+              iuom.[Qty_ per Unit of Measure] qty__per_unit_of_measure,
+              iuom.Height height,
+              iuom.Width width,
+              iuom.Length length,
+              iuom.Cubage cubage,
+              iuom.Weight weight,
+              iuom.State state,
+              iuom.Layers layers,
+              iuom.[Qty_ per Layer] qty__per_layer
+            FROM [{self.nav_company}$Item Unit of Measure] iuom
+            WHERE iuom.[Item No_] = :item_no_
+              AND iuom.Code = :code""")
+            params = {'item_no_': item.no_, 'code': code}
+            result = session.execute(sql, params).first()
+            if result:
+                return {f'{name}_quantity': float(result.qty__per_unit_of_measure),
+                        f'{name}_height': float(result.height),
+                        f'{name}_width': float(result.width),
+                        f'{name}_length': float(result.length),
+                        f'{name}_cubage': float(result.cubage),
+                        f'{name}_weight': float(result.weight),
+                        f'{name}_state': uom_state_mapper(UOMState(result.state), 'es'),
+                        f'{name}_layers': result.layers,
+                        f'{name}_qty__per_layer': result.qty__per_layer}
+            return {}
+
+        @lru_cache
+        def get_feature_questions() -> OrderedDict[int, FeatureQuestion]:
+            sql = text(f"""SELECT feat.Type type,
+                  feat.Description description,
+                  feat.[Line No_] line_no_,
+                  feat.[Multiple Answers] multiple_answers,
+                  feat.[Data Type] data_type
+                FROM [{self.nav_company}$Feature] feat
+                WHERE
+                  feat.[Profile Code] = :profile_code
+                ORDER BY feat.[Line No_]""")
+            feature_questions: list[tuple[int, FeatureQuestion]] = []
+            with Session(self.engine) as session:
+                for row in session.execute(sql, {'profile_code': FEATURE_PROFILE}):
+                    if row.type == 0:  # question
+                        feature_questions.append((row.line_no_, FeatureQuestion(
+                            line_no_=row.line_no_,
+                            description=row.description,
+                            multiple_answers=row.multiple_answers,
+                            answers=[],
+                            data_type=FeatureDataType(row.data_type))))
+                    elif row.type == 1:  # answer
+                        feature_questions[-1][1].answers.append(
+                            FeatureAnswer(description=row.description, line_no_=row.line_no_))
+            return OrderedDict(feature_questions)
+
+                
+        def get_feature_questionnaire(session, item) -> dict[str, Any]:
+            questions = get_feature_questions()
+            print('questions', questions)
+            sql = text(f"""SELECT
+              [Line No_] line_no_,
+              [Data Type] data_type,
+              [Feature Integer] feature_integer,
+              [Feature Decimal] feature_decimal,
+              [Feature Text] feature_text,
+              [Feature Date] feature_date,
+              [Feature Boolean] feature_boolean
+            FROM [{self.nav_company}$Feature Questionnaire]
+            WHERE [Profile Code] = :profile_code
+              AND No_ = :item_no_
+            ORDER BY [Line No_]""")
+            questionnaire: list[Feature] = []
+            for row in session.execute(sql, {'profile_code': FEATURE_PROFILE, 'item_no_': item.no_}):
+                print('row', row)
+                data_type = FeatureDataType(row.data_type)
+                if data_type == FeatureDataType.OPTION:
+                    pass
+                else:
+                    match data_type:
+                        case FeatureDataType.BOOLEAN:
+                            value = row.feature_boolean
+                        case FeatureDataType.DATE:
+                            value = row.feature_date
+                        case FeatureDataType.DECIMAL:
+                            value = float(row.feature_decimal)
+                        case FeatureDataType.INTEGER:
+                            value = row.feature_integer
+                        case FeatureDataType.TEXT:
+                            value = row.feature_text
+                    questionnaire.append(
+                        Feature(title=questions[row.line_no_].description, value=value))
+            return {'features': questionnaire}
+
+
+        fields_def = {
+            'no_': (['item.No_ no_'], lambda _, item: {'no_': item.no_}),
+            'description': (['item.Description description'], lambda _, item: {'description': item.description}),
+            'description_2': (['item.[Description 2] description_2'], lambda _, item: {'description_2': item.description_2}),
+            'state': (['item.State state'], lambda _, item: {'state': item.state}),
+            'blocked': (['item.Blocked blocked'], lambda _, item: {'blocked': bool(item.blocked)}),
+            'report_order': (['item.[Report Order] report_order'], lambda _, item: {'report_order': item.report_order}),
+            'blocked___quot__ord__sales_': (['item.[Blocked - Quot__Ord_ (Sales)] blocked___quot__ord__sales_'],
+                                            lambda _, item: {'blocked___quot__ord__sales_': bool(item.blocked___quot__ord__sales_)}),
+            'sales_order_multiple': (['item.[Sales Order Multiple] sales_order_multiple'],
+                                     lambda _, item: {'sales_order_multiple': float(item.sales_order_multiple)}),
+            'unit_volume': (['item.[Unit Volume] unit_volume'], lambda _, item: {'unit_volume': float(item.unit_volume)}),
+            'royalty__': (['item.[Royalty %] royalty__'], lambda _, item: {'royalty__': float(item.royalty__)}),
+            'vendor_no_': (['item.[Vendor No_] vendor_no_'], lambda _, item: {'vendor_no_': item.vendor_no_}),
+            'tariff_no_': (['item.[Tariff No_] tariff_no_'], lambda _, item: {'tariff_no_': item.tariff_no_}),
+            'item_line': (['item.No_ no_'], partial(get_dimension, name='item_line', dim_code='LINEA-PROD')),
+            'npd': (['item.No_ no_'], partial(get_dimension, name='npd', dim_code='NPD')),
+            'division': (['item.No_ no_'], partial(get_dimension, name='division', dim_code='DIVISION')),
+            'life_cycle': (['item.No_ no_'], partial(get_dimension, name='life_cycle', dim_code='CICLO-VIDA')),
+            'campaign': (['item.No_ no_'], partial(get_dimension, name='campaign', dim_code='CAMPAÑA')),
+            'ean': (['item.No_ no_'], partial(
+                get_barcode, name='ean', unit_of_measure='UDS', cross_ref_type=CrossRefType.BARCODE,
+                variant_code='', main_bar_code=True)),
+            'dun14': (['item.No_ no_'], partial(
+                get_barcode, name='dun14', unit_of_measure='STD', cross_ref_type=CrossRefType.BARCODE,
+                variant_code='', main_bar_code=True)),
+            'vendor_item': (['item.[Vendor No_] vendor_no_', 'item.[Vendor Item No_] vendor_item_no_'], partial(
+                get_vendor_item, name='vendor_item', unit_of_measure=None, cross_ref_type=CrossRefType.VENDOR,
+                variant_code='', main_bar_code=False)),
+            'price_a': (['item.[No_] no_'], partial(get_price, name='price_a', sales_code='A')),
+            'price_b': (['item.[No_] no_'], partial(get_price, name='price_b', sales_code='B')),
+            'price_i': (['item.[No_] no_'], partial(get_price, name='price_i', sales_code='I')),
+            'price_p': (['item.[No_] no_'], partial(get_price, name='price_p', sales_code='P')),
+            'price_ddp': (['item.[No_] no_'], partial(get_price, name='price_ddp', sales_code='DDP')),
+            'price_r': (['item.[No_] no_'], partial(get_price, name='price_r', sales_code='R')),
+            'std': (['item.[No_] no_'], partial(get_unit_of_measure, name='std', code='STD')),
+            'uds': (['item.[No_] no_'], partial(get_unit_of_measure, name='uds', code='UDS')),
+            'product': (['item.[No_] no_'], partial(get_unit_of_measure, name='product', code='PRODUCTO')),
+            'pallet': (['item.[No_] no_'], partial(get_unit_of_measure, name='pallet', code='PALET')),
+            'cont20': (['item.[No_] no_'], partial(get_unit_of_measure, name='cont20', code='CONT20')),
+            'cont40': (['item.[No_] no_'], partial(get_unit_of_measure, name='cont40', code='CONT40')),
+            'cont40h': (['item.[No_] no_'], partial(get_unit_of_measure, name='cont40h', code='CONT40H')),
+            'features': (['item.[No_] no_'], get_feature_questionnaire),
+        }
+
+        use_fields = ['no_', 'description', 'description_2',
+                      #'state', 'blocked',
+                      #'report_order', 'blocked___quot__ord__sales_', 'sales_order_multiple',
+                      #'unit_volume', 'royalty__', 'vendor_no_', 'tariff_no_', 'item_line',
+                      #'npd', 'division', 'life_cycle', 'campaign',
+                      #'ean', 'dun14', 'vendor_item', 'price_a', 'price_b', 'price_i', 'price_p', 'price_ddp', 'price_r',
+                      #'std', 'uds', 'product', 'pallet', 'cont20', 'cont40', 'cont40h',
+                      'features'
+                      ]
+        dependency_cols = set([col for f in use_fields for col in fields_def[f][0]])
+        where = ' AND '.join(conditions) if conditions else '1=1'
+        sql = text(f"""
+            SELECT
+                {', '.join(dependency_cols)}
+            FROM [{self.nav_company}$Item] item
+            WHERE {where}
+            ORDER BY item.[Report Order]
+        """)
+        items: list[Item] = []
+        item_fields = [f.name for f in fields(Item)]
+        with Session(self.engine) as session:
+            result = session.execute(sql, params)
+            for row in result:
+                item_data = {}
+                for field in use_fields:
+                    val = fields_def[field][1](session, row)
+                    item_data = {**item_data, **{k: v for k, v in val.items() if k in item_fields}}
+                items.append(Item(**item_data))
+        return items
+
+    # ------------------------------------------------------------------
+    # Export helpers
+    # ------------------------------------------------------------------
+
+    def _generate_excel(self) -> BytesIO:
+        import pandas as pd
+        df = self.items_df.copy()
+        df.columns = [
+            'No.', 'Descripción', 'Descripción 2',
+            'Categoría', 'Grupo producto', 'Ud. medida',
+            'Precio', 'Estado', 'Bloqueado']
+        bio = BytesIO()
+        with pd.ExcelWriter(bio, engine='openpyxl') as writer:
+            df.to_excel(writer, index=False, sheet_name='Artículos')
+        bio.seek(0)
+        return bio
+
+    def _get_drive_service(self):
+        """Build a Google Drive API service object using the user's credentials."""
+        from googleapiclient.discovery import build
+        creds = get_credentials(self._username)
+        if creds is None:
+            raise RuntimeError('Usuario no autorizado en Google Drive.')
+        return build('drive', 'v3', credentials=creds, cache_discovery=False)
+
+    def _list_drive_folders(self):
+        service = self._get_drive_service()
+        results = service.files().list(
+            q="mimeType='application/vnd.google-apps.folder' and trashed=false",
+            fields="files(id, name)",
+            orderBy="name",
+            pageSize=100).execute()
+        return results.get('files', [])
+
+    def _upload_file_to_drive(self, bio: BytesIO, filename: str, folder_id: str | None) -> str:
+        from googleapiclient.http import MediaIoBaseUpload
+        service = self._get_drive_service()
+        bio.seek(0)
+        media = MediaIoBaseUpload(
+            bio,
+            mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+            resumable=True)
+        file_metadata = {'name': filename}
+        if folder_id:
+            file_metadata['parents'] = [folder_id]
+        file = service.files().create(
+            body=file_metadata, media_body=media, fields='id,webViewLink').execute()
+        return file
+
+    # ------------------------------------------------------------------
+    # Export to Google Drive
+    # ------------------------------------------------------------------
+
+    def _show_folder_selector(self):
+        try:
+            folders = self._list_drive_folders()
+        except Exception as e:
+            self.alerts = [pn.pane.Alert(
+                f'Error al listar carpetas: {e}', alert_type='danger')]
+            return
+
+        if not folders:
+            self.alerts = [pn.pane.Alert(
+                'No se encontraron carpetas en Google Drive. '
+                'El archivo se guardará en la raíz.',
+                alert_type='warning')]
+            self._selected_folder_id = None
+            self._do_upload()
+            return
+
+        folder_select = pn.widgets.Select(
+            name='Carpeta Google Drive',
+            options={f['name']: f['id'] for f in folders})
+        confirm = pn.widgets.Button(
+            name='Confirmar y subir', button_type='primary', icon='upload')
+        cancel = pn.widgets.Button(
+            name='Cancelar', button_type='light')
+
+        def on_confirm(_):
+            self._selected_folder_id = folder_select.value
+            self.close_modal(_)
+            self._do_upload()
+
+        def on_cancel(_):
+            self._selected_folder_id = None
+            self.close_modal(_)
+
+        confirm.on_click(on_confirm)
+        cancel.on_click(on_cancel)
+
+        self.modal_view = pn.Column(
+            pn.pane.Markdown('### Seleccionar carpeta Google Drive'),
+            folder_select,
+            pn.Row(confirm, cancel),
+        )
+        self.open_modal(None)
+
+    def _do_upload(self):
+        try:
+            bio = self._generate_excel()
+            timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            filename = f'articulos_{timestamp}.xlsx'
+            folder_id = self._selected_folder_id if self._selected_folder_id else None
+            file = self._upload_file_to_drive(bio, filename, folder_id)
+            file_url = file.get('webViewLink', f"https://drive.google.com/file/d/{file['id']}/view")
+            self.alerts = [pn.pane.Alert(
+                f'Archivo subido a Google Drive. '
+                f'<a href="{file_url}" target="_blank">Abrir en navegador</a>',
+                alert_type='success')]
+        except Exception as e:
+            self.alerts = [pn.pane.Alert(
+                f'Error al subir: {e}', alert_type='danger')]
+
+    def export_to_drive(self, *_):
+        self.alerts = []
+        self._check_gdrive_connection()
+        if not self._gdrive_connected:
+            self.alerts = [pn.pane.Alert(
+                'Google Drive no conectado. Autoriza la conexión primero.',
+                alert_type='warning')]
+            return
+        self._show_folder_selector()
+
+    # ------------------------------------------------------------------
+    # View
+    # ------------------------------------------------------------------
+
+    @pn.depends('items_df', 'loading', 'alerts', '_gdrive_connected')
+    def view(self) -> pn.Column:
+        if self.loading:
+            return pn.Column(
+                pn.indicators.LoadingSpinner(
+                    value=True, size=50, align='center'),
+                pn.pane.Markdown('Obteniendo artículos...', align='center'))
+
+        elements = [*self.alerts]
+
+        if self.items_df is not None and not self.items_df.empty:
+            self.tabulator = pn.widgets.Tabulator(
+                self.items_df,
+                disabled=True,
+                pagination='local',
+                page_size=25,
+                sortable=True,
+                theme='fast',
+                sizing_mode='stretch_width',
+                height=600,
+                titles={
+                    field_name: get_field_title(field_name, 'es')
+                    for field_name in self.get_fields()},
+                formatters={
+                    field_name: formatter
+                    for field_name in self.get_fields()
+                    if (formatter := get_field_formatter(field_name))},
+            )
+            elements.append(self.tabulator)
+        elif self.items_df is not None:
+            elements.append(pn.pane.Markdown(
+                'No se encontraron artículos con los filtros seleccionados.',
+                align='center'))
+
+        return pn.Column(*elements, scroll=True)
+
+    @pn.depends('modal_view')
+    def modal(self) -> pn.Column:
+        return self.modal_view
+
+
+def get_nav_dburi() -> str:
+    nav_secrets = Config()['navision']
+    return (f"mssql+pyodbc://{nav_secrets['user']}:{nav_secrets['password']}"
+            f"@{nav_secrets['host']}:{nav_secrets['port']}/{nav_secrets['dbname']}"
+            f"?{nav_secrets['params']}&APP={quote(APPLICATION_NAME)}&Mars_Connection=Yes")
+
+
+def get_nav_company():
+    nav_secrets = Config()['navision']
+    return nav_secrets['company']
+
+
+@site.add(APPLICATION)
+def view() -> MyMaterialTemplate:
+    """Returns a servable Template."""
+    pn.config.sizing_mode = "stretch_width"
+    app = ExportItemsApp(
+        name=APPLICATION.name,
+        get_nav_dburi=get_nav_dburi,
+        get_nav_company=get_nav_company,
+        open_modal=lambda event: template.open_modal(),
+        close_modal=lambda event: template.close_modal())
+    template = MyMaterialTemplate(title=APPLICATION.name)
+    template.sidebar.append(pn.pane.HTML('<hr/>'))
+    template.sidebar.append(app.settings_panel)
+    template.main.append(app.view)
+    template.modal.append(app.modal)
+    return template
+
+
+if __name__.startswith("bokeh"):
+    view().servable()

@@ -1,0 +1,28 @@
+-e package
+wheel
+altair
+babel
+bokeh
+diskcache
+flake8
+holoviews[recommended]
+ipykernel
+ipython
+gspread
+matplotlib
+ms-active-directory
+mypy
+nbconvert  # required for converting notebooks
+openpyxl
+pandas
+#panel == 1.5.5
+panel == 1.6.2
+panel-graphic-walker
+papermill
+psycopg[binary]
+pylint
+pyodbc
+pyyaml
+sqlalchemy
+#sqlalchemy < 2  # required for pandas < 2.0 https://github.com/pandas-dev/pandas/issues/51015
+squarify

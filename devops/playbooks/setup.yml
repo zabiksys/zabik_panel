@@ -1,0 +1,113 @@
+---
+# Playbook: playbooks/setup.yml
+# Description: Server setup
+#
+# Usage:
+#
+# ./bin/ansible-playbook playbooks/setup.yml
+#
+- hosts: all
+  gather_facts: true
+  become: true
+  pre_tasks:
+
+    - name: "Base Packages: Setup"
+      ansible.builtin.import_tasks: ../tasks/base/task_base_packages.yml
+
+  tasks:
+    - name: "Docker: Setup"
+      ansible.builtin.import_tasks: ../tasks/base/task_docker.yml
+      tags:
+        - base
+        - docker
+  
+    - name: Check if panel image already exists
+      community.docker.docker_image_info:
+        name: "{{ panel_docker_image }}"
+      register: result
+
+    - name: Create panel image
+      block:
+      - name: Create build directory
+        ansible.builtin.file:
+          path: "{{ build_directory }}"
+          state: directory
+          mode: '0755'
+        become: no
+
+      - name: Clone panel src
+        ansible.builtin.synchronize:
+          src: "{{ playbook_dir }}/../../"
+          dest: "{{ build_directory }}"
+        become: no
+
+      # - name: Clone panel src
+      #   ansible.builtin.synchronize:
+      #     src: "{{ playbook_dir }}/../../{{ item }}"
+      #     dest: "{{ build_directory }}"
+      #   become: no
+      #   with_items:
+      #     - application
+      #     - auth
+      #     - myapp
+      #     - packages
+      #     - template
+      #     - Dockerfile
+      #     - main.py
+      #     - pyproject.toml
+
+      # - name: Copy Dockerfile
+      #   copy:
+      #     src: ../files/docker/panel/Dockerfile
+      #     dest: "{{ build_directory  }}"
+      #     owner: root
+      #     group: root
+      #     mode: '0644'
+
+      - name: Build panel docker image
+        community.docker.docker_image:
+          name: "{{ panel_docker_image }}"
+          build:
+            # args:
+            #   panel_bokeh_port: "{{ panel_bokeh_port }}"
+            #   panel_bokeh_allow_ws_origin: {{ panel_bokeh_allow_ws_origin }}
+            #   panel_bokeh_auth_module: {{ panel_bokeh_auth_module }}
+            #   panel_bokeh_cookie_secret: {{ panel_bokeh_cookie_secret }}
+            path: "{{ build_directory }}"
+          source: build
+          state: present
+      always:
+        - name: Remove build directory
+          ansible.builtin.file:
+            path: "{{ build_directory }}"
+            state: absent
+      vars:
+        build_directory: /tmp/docker_panel
+      when: not result.images or rebuild_panel_image is defined
+
+    - name: Create network
+      community.docker.docker_network:
+        name: "{{ panel_default_network }}"
+
+    - name: Deploy panel server
+      community.docker.docker_container:
+        name: "{{ panel_project }}_panel_server"
+        image: "{{ panel_docker_image }}"
+        published_ports:
+          - "{{ panel_port }}:5006"
+        env:
+          BOKEH_PORT: "{{ panel_bokeh_port | quote }}"
+          BOKEH_ALLOW_WS_ORIGIN: "{{ panel_bokeh_allow_ws_origin }}"
+          BOKEH_AUTH_MODULE: "{{ panel_bokeh_auth_module }}"
+          BOKEH_COOKIE_SECRET: "{{ panel_bokeh_cookie_secret }}"
+          PRODUCTION: "1"
+          PANEL_CONFIG_PATH: "/app/config/.secrets.yaml"
+          PANEL_CACHE_PATH: "/app/config/panelindexcache"
+          PANEL_NOTEBOOKS_DIR: "/app/notebooks"
+        volumes:
+          - "{{ panel_config_volume }}:/app/config"
+          - "{{ panel_notebooks_volume }}:/app/notebooks"
+        networks:
+          - name: "{{ panel_default_network }}"
+        restart_policy: "{{ panel_develop is defined | ternary('no', 'always') }}"
+        state: "{{ panel_develop is defined | ternary('present', 'started') }}"

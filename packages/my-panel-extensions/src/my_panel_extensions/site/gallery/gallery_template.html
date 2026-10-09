@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>{{ head_title | e if head_title else "Panel | Gallery" }}</title>
+    {% if app_favicon %}<link rel="icon" href="{{ app_favicon }}" type="{{ favicon_type }}">{% endif %}
+    {% if meta_name %}<meta name="name" content="{{ meta_name }}">{% endif %}
+    {% if meta_description %}<meta name="description" content="{{ meta_description }}">{% endif %}
+    {% if meta_keywords %}<meta name="keywords" content="{{ meta_keywords }}">{% endif %}
+    {% if meta_author %}<meta name="author" content="{{ meta_author }}">{% endif %}
+    {% if meta_refresh %}<meta http-equiv="refresh" content="{{ meta_refresh }}">{% endif %}
+    {% if meta_viewport %}<meta name="viewport" content="{{ meta_viewport }}">{% endif %}
+    {% if base_url and base_target %}<base href="{{ base_url }}" target="{{ base_target }}">{% endif %}
+    <style>*:not(:defined){visibility:hidden}</style>
+    <style>
+        {{ gallery_css }}
+        :root { --body-font: {{ font_family }}; }
+        body { font-family: var(--body-font); }
+        {% if background_image %}
+        .header {
+            /* Photo by mnm.all on Unsplash */
+            background-image: url('{{ background_image }}');
+        }
+        {% endif %}
+    </style>
+    {% if font_url %}
+    <link rel="stylesheet" type="text/css" href="{{ font_url }}" />
+    {% endif %}
+    <link href="https://use.typekit.net/spx2dgm.css" rel="stylesheet">
+    <script type="module" src="https://unpkg.com/@microsoft/fast-colors@5.1.0"></script>
+    <script type="module" src="https://unpkg.com/@microsoft/fast-components@1.13.0"></script>
+    <script type="text/javascript">{{ gallery_js }}</script>
+    <script type="module">
+        import { parseColorHexRGB } from "https://unpkg.com/@microsoft/fast-colors@5.1.0";
+        import { createColorPalette } from "https://unpkg.com/@microsoft/fast-components@1.13.0";
+
+        function standardize_color(str){
+            var ctx = document.createElement('canvas').getContext('2d');
+            ctx.fillStyle = str;
+            return ctx.fillStyle;
+          }
+
+        function setAccentColor(color, selector){
+            color = standardize_color(color);
+            const accent = color;
+            const palette = createColorPalette(parseColorHexRGB(accent));
+            const provider = document.querySelector(selector);
+            provider.accentBaseColor = accent;
+            provider.accentPalette = palette;
+        }
+        setAccentColor("{{ accent_base_color }}", "#body-design-provider");
+        setAccentColor("#ffffff", "#header-design-provider");
+
+        function setNeutralColor(color, selector){
+            const palette = createColorPalette(parseColorHexRGB(color));
+            const provider = document.querySelector(selector);
+
+            provider.neutralPalette = palette;
+        }
+        setNeutralColor("#ffffff", "#header-design-provider");
+        setNeutralColor("#000000", "#body-design-provider");
+        </script>
+</head>
+<body>
+    <fast-design-system-provider id="body-design-provider" use-defaults background-color="{% if theme=='dark' %}#000000{% else %}#ffffff{% endif %}" class="theme-{{ theme }}"
+        >
+        {% block inner_body %}
+        {% block contents %}
+            <fast-design-system-provider id="header-design-provider" use-defaults background-color="#000000">
+            <section class="header">
+            {% if theme_toggle %}
+            <fast-switch id="theme-switch" style="float: right; padding-top: 1em; padding-right: 2em;" onChange="toggleLightDarkTheme()" {% if theme=='default' %}checked{% endif %}>
+                <span slot="checked-message">
+                    <svg class="theme-toggle-icon" fill="currentColor" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25"><path d="M0 0h24v24H0z" fill="none"/><path d="M6.76 4.84l-1.8-1.79-1.41 1.41 1.79 1.79 1.42-1.41zM4 10.5H1v2h3v-2zm9-9.95h-2V3.5h2V.55zm7.45 3.91l-1.41-1.41-1.79 1.79 1.41 1.41 1.79-1.79zm-3.21 13.7l1.79 1.8 1.41-1.41-1.8-1.79-1.4 1.4zM20 10.5v2h3v-2h-3zm-8-5c-3.31 0-6 2.69-6 6s2.69 6 6 6 6-2.69 6-6-2.69-6-6-6zm-1 16.95h2V19.5h-2v2.95zm-7.45-3.91l1.41 1.41 1.79-1.8-1.41-1.41-1.79 1.8z"/></svg>
+                  </span>
+                  <span slot="unchecked-message">
+                    <svg class="theme-toggle-icon" fill="currentColor" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 25 25"><path d="M0 0h24v24H0z" fill="none"/><path d="M10 2c-1.82 0-3.53.5-5 1.35C7.99 5.08 10 8.3 10 12s-2.01 6.92-5 8.65C6.47 21.5 8.18 22 10 22c5.52 0 10-4.48 10-10S15.52 2 10 2z"/></svg>
+                  </span>
+            </fast-switch>
+            {% endif %}
+            <fast-tooltip anchor="theme-switch">Click to toggle the Theme</fast-tooltip>
+            <div class="header-grid">
+            <h1>
+                <fast-anchor id="title" href="{{ site_url }}" appearance="neutral" target="{{ target }}">{{ site_name }} </fast-anchor>
+                <fast-anchor id="divider" appearance="neutral">/</fast-anchor>
+                <fast-anchor id="subtitle" href="{{ url }}" appearance="neutral" target="{{ target }}">{{ name }}</fast-anchor>
+            </h1>
+            <article>
+                <p>{{ description}}</p>
+            </article>
+            </div>
+            </section>
+            </fast-design-system-provider>
+            <section class="search">
+                <fast-text-field id="search-input" placeholder="search" onInput="hideCards(event.target.value)"></fast-text-field>
+            </section>
+            <section id="cards">
+            <ul class="cards-grid">
+            {% for app in applications %}
+            <li class="card">
+                <fast-card class="gallery-item">
+                    <a title="Click to open" class="card-action" href="{{ app.url }}" target="{{ target }}">
+                    <img class="card-image" src="{{ app.thumbnail }}"/>
+                    <div class="card-content">
+                        <h2 class="card-header">{{ app.name }}</h2>
+                        <p class="card-text">{{ app.description }}</p>
+                    </div></a>
+                </fast-card>
+            </li>
+            {% endfor %}
+            </ul>
+            </section>
+            {% if footer %}
+            <section>
+            <fast-divider></fast-divider>
+            <footer><p>
+                {{ footer }}
+            </p></footer>
+            </section>
+            {% endif %}
+        {% endblock %}
+        {{ plot_script | indent(8) }}
+        {% endblock %}
+    <script type="text/javascript">
+        setSwitchFromParams()
+        setSearchFromParams()
+    </script>
+    </fast-design-system-provider>
+</body>
+</html>

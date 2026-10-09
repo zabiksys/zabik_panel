@@ -1,0 +1,12 @@
+---
+panel_project: "{{ lookup('ansible.builtin.env', 'PANEL_PROJECT', default='zabik') }}"
+panel_prefix: "{{ lookup('ansible.builtin.env', 'PANEL_IMAGE_PREFIX', default='zabik') }}"
+panel_docker_image: "{{ panel_prefix }}/panel:1.9.4-python-3.13-4"
+panel_default_network: "{{ panel_project }}-panel"
+panel_port: "{{ lookup('ansible.builtin.env', 'PANEL_PORT', default='5006') }}"
+panel_bokeh_port: "{{ lookup('ansible.builtin.env', 'PANEL_BOKEH_PORT', default='5006') }}"
+panel_bokeh_allow_ws_origin: "{{ ansible_facts['fqdn'] }}:{{ panel_port }},panel.local.zabik:{{ panel_port }}"
+panel_bokeh_auth_module: auth/auth.py
+panel_bokeh_cookie_secret: "{{ lookup('ansible.builtin.env', 'BOKEH_COOKIE_SECRET') }}"
+panel_config_volume: "{{ lookup('ansible.builtin.env', 'PANEL_CONFIG_VOLUME', default='panel_config_zabik') }}"
+panel_notebooks_volume: "{{ lookup('ansible.builtin.env', 'PANEL_NOTEBOOKS_VOLUME', default='panel_notebooks_zabik') }}"

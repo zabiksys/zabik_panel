@@ -1,0 +1,78 @@
+from application.config import secrets
+from datetime import date, datetime, time
+from decimal import Decimal
+from sqlalchemy import create_engine
+from sqlalchemy import Column, DateTime, Integer, Numeric, String
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import declarative_base
+
+
+NULLDATE = datetime(1753, 1, 1, 0, 0, 0)
+Base = declarative_base()
+NAV_SECRETS = secrets()['navision']
+NAV_COMPANY = NAV_SECRETS.get('company')
+NAV_DBURI = 'mssql+pyodbc://{}:{}@{}/{}?{}'.format(
+    NAV_SECRETS['user'], NAV_SECRETS['password'], NAV_SECRETS['host'],
+    NAV_SECRETS['dbname'], NAV_SECRETS['params'])
+ENGINE = create_engine(NAV_DBURI, echo=False)
+
+
+class SalesReportEntry(Base):
+    __tablename__ = f'{NAV_COMPANY}$Sales Report Entry'
+
+    entry_no_ = Column('Entry No_', Integer, primary_key=True, autoincrement=False)
+    partner_no_ = Column('Partner No_', String(20), default='', nullable=False)
+    global_localtion_no_ = Column('Global Location No_', String(20), default='', nullable=False)
+    _posting_date = Column('Posting Date', DateTime, default=NULLDATE, nullable=False)
+    item_no_ = Column('Item No_', String(20), default='', nullable=False)
+    quantity = Column('Quantity', Numeric(38, 20), default=Decimal(0), nullable=False)
+    _initial_reporting_date = Column('Initial reporting Date', DateTime, default=NULLDATE, nullable=False)
+    _ending_reporting_date = Column('Ending reporting Date', DateTime, default=NULLDATE, nullable=False)
+    eanart = Column('EANART', String(20), default='', nullable=False)
+    codcom = Column('CODCOM', String(20), default='', nullable=False)
+    codpro = Column('CODPRO', String(20), default='', nullable=False)
+    eanven = Column('EANVEN', String(20), default='', nullable=False)
+    eanlug = Column('EANLUG', String(20), default='', nullable=False)
+    reference = Column('REFERENCE', String(30), default='', nullable=False)
+    posting_datetime = Column('Posting Datetime', DateTime, default=NULLDATE, nullable=False)
+
+    @hybrid_property
+    def posting_date(self):
+        return self._posting_date
+
+    @posting_date.setter
+    def posting_date(self, value):
+        if type(value) == date:
+            self._posting_date = datetime.combine(value, time(0, 0), tzinfo=None)
+        else:
+            self._posting_date = value
+
+    @hybrid_property
+    def initial_reporting_date(self):
+        return self._initial_reporting_date
+
+    @initial_reporting_date.setter
+    def initial_reporting_date(self, value):
+        if type(value) == date:
+            self._initial_reporting_date = datetime.combine(value, time(0, 0), tzinfo=None)
+        else:
+            self._initial_reporting_date = value
+
+    @hybrid_property
+    def ending_reporting_date(self):
+        return self._ending_reporting_date
+
+    @ending_reporting_date.setter
+    def ending_reporting_date(self, value):
+        if type(value) == date:
+            self._ending_reporting_date = datetime.combine(value, time(0, 0), tzinfo=None)
+        else:
+            self._ending_reporting_date = value
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(entry_no_={self.entry_no_!r}, partner_no_={self.partner_no_!r}, item_no_={self.item_no_!r})'
+
+
+BINDS = {
+    SalesReportEntry: ENGINE,
+}

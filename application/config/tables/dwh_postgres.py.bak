@@ -1,0 +1,341 @@
+from application.config import secrets
+from application.utils import date2key, key2date
+from datetime import date
+from decimal import Decimal
+from sqlalchemy import create_engine
+from sqlalchemy import Column, DateTime, ForeignKey, Integer, Numeric, String
+from sqlalchemy.ext.hybrid import hybrid_property
+from sqlalchemy.orm import declarative_base, relationship
+
+
+Base = declarative_base()
+DWH_POSTGRES_SECRETS = secrets()['datawarehouse']
+DWH_POSTGRES_DBURI = 'postgresql://{}:{}@{}/{}'.format(
+    DWH_POSTGRES_SECRETS['user'], DWH_POSTGRES_SECRETS['password'],
+    DWH_POSTGRES_SECRETS['host'], DWH_POSTGRES_SECRETS['dbname'])
+ENGINE = create_engine(DWH_POSTGRES_DBURI, echo=False)
+
+
+class _DimBase:
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    code = Column(String(20), nullable=False)
+    name = Column(String(50), nullable=True)
+    caption = Column(String(71), nullable=True)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, code={self.code!r})'
+
+
+class DimAccountManager(_DimBase, Base):
+    __tablename__ = 'dim_account_manager'
+
+
+class DimArea(Base):
+    __tablename__ = 'dim_area'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    code = Column(String(10), nullable=False)
+    text = Column(String(50), nullable=True)
+    post_code_prefix = Column(String(20), nullable=True)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, code={self.code!r})'
+
+
+class DimCommercialArea(_DimBase, Base):
+    __tablename__ = 'dim_commercial_area'
+
+
+class DimCountryRegion(Base):
+    __tablename__ = 'dim_country_region'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    code = Column(String(10), nullable=False)
+    name = Column(String(50), nullable=True)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, code={self.code!r})'
+
+
+class DimCustomer(Base):
+    __tablename__ = 'dim_customer'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    no_ = Column(String(20), nullable=False)
+    caption = Column(String(71), nullable=True)
+    name = Column(String(50), nullable=True)
+    salesperson_key = Column(Integer, ForeignKey('dim_salesperson_purchaser.key'), nullable=True)
+    salesperson = relationship('DimSalespersonPurchaser', backref='customers')
+    purchasegroup_key = Column(Integer, ForeignKey('dim_purchase_group.key'), nullable=True)
+    purchasegroup = relationship('DimPurchaseGroup', backref='customers')
+    channel_key = Column(Integer, ForeignKey('dim_customer_channel.key'), nullable=True)
+    channel = relationship('DimCustomerChannel', backref='customers')
+    city = Column(String(30), nullable=True)
+    county_key = Column(Integer, ForeignKey('dim_area.key'), nullable=True)
+    county = relationship('DimArea', backref='customers')
+    country_key = Column(Integer, ForeignKey('dim_country_region.key'), nullable=True)
+    country = relationship('DimCountryRegion', backref='customers')
+    commercial_area_key = Column(Integer, ForeignKey('dim_commercial_area.key'), nullable=False)
+    commercial_area = relationship('DimCommercialArea', backref='customers')
+    accountmanager_key = Column(Integer, ForeignKey('dim_account_manager.key'), nullable=False)
+    accountmanager = relationship('DimAccountManager', backref='customers')
+    customercategory_key = Column(Integer, ForeignKey('dim_customer_category.key'), nullable=False)
+    customercategory = relationship('DimCustomerCategory', backref='customers')
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, no_={self.no_!r}, name={self.name!r})'
+
+
+class DimCustomerCategory(_DimBase, Base):
+    __tablename__ = 'dim_customer_category'
+
+
+class DimCustomerChannel(_DimBase, Base):
+    __tablename__ = 'dim_customer_channel'
+
+
+class DimDivision(_DimBase, Base):
+    __tablename__ = 'dim_division'
+
+
+class DimEDIPartner(Base):
+    __tablename__ = 'dim_edi_partner'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    no_ = Column(String(20), nullable=False)
+    name = Column(String(50), nullable=True)
+    purchasegroup_key = Column(Integer, ForeignKey('dim_purchase_group.key'), nullable=True)
+    purchasegroup = relationship('DimPurchaseGroup', backref='edi_partners')
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, no_={self.no_!r}, name={self.name!r})'
+
+
+class DimEDIPartnerLine(Base):
+    __tablename__ = 'dim_edi_partner_line'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    edi_partner_key = Column(Integer, ForeignKey('dim_edi_partner.key'), nullable=True)
+    edi_partner = relationship('DimEDIPartner', backref='edi_partner_lines')
+    no_ = Column(String(20), nullable=False)
+    name = Column(String(50), nullable=True)
+    name_2 = Column(String(50), nullable=True)
+    global_location_no_ = Column(String(20), nullable=True)
+    salesperson_key = Column(Integer, ForeignKey('dim_salesperson_purchaser.key'), nullable=True)
+    salesperson = relationship('DimSalespersonPurchaser')
+    link_to_customer_key = Column(Integer, ForeignKey('dim_customer.key'), nullable=True)
+    link_to_customer = relationship('DimCustomer')
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, no_={self.no_!r}, name={self.name!r})'
+
+
+class DimItem(Base):
+    __tablename__ = 'dim_item'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    no_ = Column(String(20), nullable=False)
+    caption = Column(String(71), nullable=True)
+    description = Column(String(50), nullable=True)
+    division_key = Column(Integer, ForeignKey('dim_division.key'), nullable=False)
+    division = relationship('DimDivision', backref='items')
+    itemline_key = Column(Integer, ForeignKey('dim_item_line.key'), nullable=False)
+    itemline = relationship('DimItemLine', backref='items')
+    lifecycle_key = Column(Integer, ForeignKey('dim_item_life_cycle.key'), nullable=False)
+    lifecycle = relationship('DimLifeCycle', backref='items')
+    npd_key = Column(Integer, ForeignKey('dim_npd.key'), nullable=False)
+    npd = relationship('DimNPD', backref='items')
+    vendor_key = Column(Integer, ForeignKey('dim_vendor.key'), nullable=False)
+    vendor = relationship('DimVendor', backref='items')
+    report_order = Column(Integer, nullable=True)
+    state = Column(String(20), nullable=False)
+    unit_price = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    unit_volume = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    gross_weight = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    direct_unit_cost_usd = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    product_manager_key = Column(Integer, ForeignKey('dim_product_manager.key'), nullable=False)
+    product_manager = relationship('DimProductManager', backref='items')
+    report_order_2 = Column(Integer, nullable=True)
+    report_order_3 = Column(Integer, nullable=True)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, no_={self.no_!r}, description={self.description!r})'
+
+
+class DimItemLine(_DimBase, Base):
+    __tablename__ = 'dim_item_line'
+
+
+class DimLifeCycle(_DimBase, Base):
+    __tablename__ = 'dim_item_life_cycle'
+
+
+class DimNPD(_DimBase, Base):
+    __tablename__ = 'dim_npd'
+
+
+class DimProductManager(_DimBase, Base):
+    __tablename__ = 'dim_product_manager'
+
+
+class DimPurchaseGroup(_DimBase, Base):
+    __tablename__ = 'dim_purchase_group'
+
+
+class DimSalespersonPurchaser(Base):
+    __tablename__ = 'dim_salesperson_purchaser'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    code = Column(String(10), nullable=False)
+    caption = Column(String(61), nullable=False)
+    name = Column(String(50), nullable=True)
+    state = Column(String(20), nullable=False)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, code={self.code!r})'
+
+
+class DimVendor(Base):
+    __tablename__ = 'dim_vendor'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    no_ = Column(String(20), nullable=False)
+    caption = Column(String(71), nullable=True)
+    name = Column(String(50), nullable=True)
+    county_key = Column(Integer, ForeignKey('dim_area.key'), nullable=True)
+    county = relationship('DimArea', backref='vendors')
+    country_key = Column(Integer, ForeignKey('dim_country_region.key'), nullable=True)
+    country = relationship('DimCountryRegion', backref='vendors')
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, no_={self.no_!r}, name={self.name!r})'
+
+
+class FactItemCustomerSales(Base):
+    __tablename__ = 'fact_item_customer_sales'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    entry_no_ = Column(Integer, nullable=True)
+    edi_partner_key = Column(Integer, ForeignKey('dim_edi_partner.key'), nullable=False)
+    edi_partner = relationship('DimEDIPartner', backref='fact_item_customer_sales')
+    edi_partner_line_key = Column(Integer, ForeignKey('dim_edi_partner_line.key'), nullable=False)
+    edi_partner_line = relationship('DimEDIPartnerLine', backref='fact_item_customer_sales')
+    item_key = Column(Integer, ForeignKey('dim_item.key'), nullable=False)
+    item = relationship('DimItem', backref='fact_item_customer_sales')
+    quantity = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    posting_date_key = Column(Integer, nullable=False)
+    initial_reporting_date_key = Column(Integer, nullable=False)
+    ending_reporting_date_key = Column(Integer, nullable=False)
+    amount = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    purchasegroup_key = Column(Integer, ForeignKey('dim_purchase_group.key'), nullable=True)
+    purchasegroup = relationship('DimPurchaseGroup', backref='fact_item_customer_sales')
+    eanart = Column(String(20), nullable=True)
+    codcom = Column(String(20), nullable=True)
+    codpro = Column(String(20), nullable=True)
+    eanven = Column(String(20), nullable=True)
+    eanlug = Column(String(20), nullable=True)
+    reference = Column(String(50), nullable=True)
+
+    @hybrid_property
+    def posting_date(self):
+        return key2date(self.posting_date_key)
+
+    @posting_date.setter
+    def posting_date(self, value: date):
+        self.posting_date_key = date2key(value)
+
+    @hybrid_property
+    def initial_reporting_date(self):
+        return key2date(self.initial_reporting_date_key)
+
+    @initial_reporting_date.setter
+    def initial_reporting_date(self, value: date):
+        self.initial_reporting_date_key = date2key(value)
+
+    @hybrid_property
+    def ending_reporting_date(self):
+        return key2date(self.ending_reporting_date_key)
+
+    @ending_reporting_date.setter
+    def ending_reporting_date(self, value: date):
+        self.ending_reporting_date_key = date2key(value)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, edi_partner_no_={self.edi_partner.no_!r}, item_no_={self.item.no_!r})'
+
+
+class FactItemCustomerSalesErrors(Base):
+    __tablename__ = 'fact_item_customer_sales_errors'
+
+    key = Column(Integer, primary_key=True, autoincrement=False)
+    partner_no_ = Column(String(20), ForeignKey('dim_edi_partner.no_'), nullable=True)
+    partner = relationship('DimEDIPartner')
+    global_location_no_ = Column(String(20), ForeignKey('dim_edi_partner_line.global_location_no_'), nullable=True)
+    partner_line = relationship(
+        'DimEDIPartnerLine',
+        primaryjoin='and_(FactItemCustomerSalesErrors.partner_no_==DimEDIPartnerLine.no_, '
+        'FactItemCustomerSalesErrors.global_location_no_==DimEDIPartnerLine.global_location_no_)')
+    posting_date_key = Column(Integer, nullable=True)
+    item_no_ = Column(String(20), ForeignKey('dim_item.no_'), nullable=True)
+    item = relationship('DimItem')
+    quantity = Column(Numeric(18, 6), default=Decimal(0), nullable=False)
+    initial_reporting_date_key = Column(Integer, nullable=True)
+    ending_reporting_date_key = Column(Integer, nullable=True)
+    posting_datetime = Column(DateTime, nullable=False)
+    eanart = Column(String(20), nullable=True)
+    codcom = Column(String(20), nullable=True)
+    codpro = Column(String(20), nullable=True)
+    eanven = Column(String(20), nullable=True)
+    eanlug = Column(String(20), nullable=True)
+    reference = Column(String(50), nullable=True)
+
+    @hybrid_property
+    def posting_date(self):
+        return key2date(self.posting_date_key)
+
+    @posting_date.setter
+    def posting_date(self, value: date):
+        self.posting_date_key = date2key(value)
+
+    @hybrid_property
+    def initial_reporting_date(self):
+        return key2date(self.initial_reporting_date_key)
+
+    @initial_reporting_date.setter
+    def initial_reporting_date(self, value: date):
+        self.initial_reporting_date_key = date2key(value)
+
+    @hybrid_property
+    def ending_reporting_date(self):
+        return key2date(self.ending_reporting_date_key)
+
+    @ending_reporting_date.setter
+    def ending_reporting_date(self, value: date):
+        self.ending_reporting_date_key = date2key(value)
+
+    def __repr__(self):
+        return f'{self.__class__.__name__}(key={self.key!r}, partner_no_={self.partner.no_!r}, item_no_={self.item_no_!r})'
+
+
+BINDS = {
+    DimAccountManager: ENGINE,
+    DimArea: ENGINE,
+    DimCommercialArea: ENGINE,
+    DimCountryRegion: ENGINE,
+    DimCustomer: ENGINE,
+    DimCustomerCategory: ENGINE,
+    DimCustomerChannel: ENGINE,
+    DimDivision: ENGINE,
+    DimEDIPartner: ENGINE,
+    DimEDIPartnerLine: ENGINE,
+    DimItem: ENGINE,
+    DimItemLine: ENGINE,
+    DimLifeCycle: ENGINE,
+    DimNPD: ENGINE,
+    DimProductManager: ENGINE,
+    DimPurchaseGroup: ENGINE,
+    DimSalespersonPurchaser: ENGINE,
+    DimVendor: ENGINE,
+    FactItemCustomerSales: ENGINE,
+    FactItemCustomerSalesErrors: ENGINE,
+}

@@ -1,0 +1,13 @@
+[project]
+name = "my-panel-extensions"
+version = "0.1.0"
+description = "My panel extensions"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "panel",
+]
+
+[build-system]
+requires = ["hatchling>=1.18.0"]
+build-backend = "hatchling.build"

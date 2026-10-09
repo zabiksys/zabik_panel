@@ -1,0 +1,22 @@
+"""Setup file. The package can be installed for development by running
+
+pip install -e .
+
+or similar where . is replaced by the path to package root
+"""
+from setuptools import setup
+
+setup(
+    name='my_panel_extensions',
+    version='0.1.0',
+    author='Juan Carlos Coruña',
+    author_email='jcn@bizak.es',
+    packages=['my_panel_extensions'],
+    url='http://pypi.python.org/pypi/PackageName/',
+    license='LICENSE.txt',
+    description='My panel extensions',
+    long_description=open('README.md').read(),
+    install_requires=[
+        "panel",
+    ],
+)

@@ -1,0 +1,550 @@
+"""Manage apps."""
+from dataclasses import dataclass
+from datetime import datetime
+from io import BytesIO
+import os
+from pathlib import Path
+import shutil
+from typing import Dict, Optional
+import zipfile
+
+from application.config.config import PANEL_NOTEBOOKS_DIR
+from babel.numbers import format_decimal
+from bokeh.models import DateFormatter
+from my_panel_extensions.site import site
+import pandas as pd
+import panel as pn
+import param
+from template import MyMaterialTemplate
+import yaml
+
+
+pn.extension('tabulator')
+pn.config.raw_css.append("""
+@import url('https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0-beta3/css/all.min.css');
+""")
+
+NOTEBOOKS_DIR = Path(os.getenv(PANEL_NOTEBOOKS_DIR))
+APPLICATION = site.create_application(
+    url='manage_apps',
+    name='Gestionar Apps',
+    description='',
+    description_long=__doc__,
+    thumbnail='/assets/images/thumbnails/manage_apps.png',
+    tags=['sistemas'],
+)
+
+
+@dataclass(frozen=True)
+class Column:
+    """Column."""
+
+    title: Optional[str] = None
+    align: Optional[str] = None
+    format: Optional[Dict] = None
+
+
+def _paths_in_path(folder: Path) -> list[Path]:
+    return sorted(list(folder.glob('*')), key=lambda x: x.name)
+
+
+def _paths_in_path_df(folder: Path) -> pd.DataFrame:
+    return pd.DataFrame([
+        [p, p.name, datetime.fromtimestamp(p.stat().st_mtime),
+         p.stat().st_size]
+        for p in _paths_in_path(folder)],
+                        columns=['path', 'name', 'mdate', 'size'])
+
+
+def _filename_icon(path: Path) -> str:
+    if path.is_dir():
+        return '<i class="fa-solid fa-folder"></i>'
+    elif path.suffix in ['.py', '.ipynb']:
+        return '<i class="fa-brands fa-python"></i>'
+    elif path.suffix in ['.yml', '.yaml']:
+        return '<i class="fa-solid fa-file-lines"></i>'
+    elif path.suffix == '.json':
+        return '<i class="fa-solid fa-file-lines"></i>'
+    elif path.suffix == '.pdf':
+        return '<i class="fa-solid fa-file-pdf"></i>'
+    elif path.suffix in ['.png', '.jpg', '.jpeg', '.gif']:
+        return '<i class="fa-solid fa-file-image"></i>'
+    elif path.suffix in ['.xls', '.xlsx']:
+        return '<i class="fa-solid fa-file-excel"></i>'
+    elif path.name == '..':
+        return '<i class="fa-solid fa-folder-arrow-up"></i>'
+    else:
+        return '<i class="fa-solid fa-file"></i>'
+
+
+def _human_readable_size(size_in_bytes: int) -> str:
+    """Convert a file size in bytes to a human-readable format."""
+    if size_in_bytes < 0:
+        raise ValueError('Size must be a non-negative integer.')
+
+    # Define the units
+    units = ['bytes', 'KiB', 'MiB', 'GiB', 'TiB']
+    index = 0
+
+    # Convert the size
+    while size_in_bytes >= 1024 and index < len(units) - 1:
+        size_in_bytes /= 1024.0
+        index += 1
+
+    size = format_decimal(size_in_bytes, format="#,##0.#", locale="es_ES")
+    return f'{size} {units[index]}'
+
+
+class ManageAppsApp(param.Parameterized):
+    """Manage Apps"""
+
+    apps_df = param.DataFrame()
+    settings_panel = param.Parameter()
+    upload_file = param.Action(label='Subir archivo')
+    file_ = param.FileSelector()
+    alerts = param.List(item_type=pn.pane.Alert)
+    root_dir = param.ClassSelector(class_=Path, default=NOTEBOOKS_DIR)
+    current_dir = param.ClassSelector(class_=Path, default=NOTEBOOKS_DIR)
+    current_paths_df = param.DataFrame(
+        default=_paths_in_path_df(NOTEBOOKS_DIR))
+    breadcrumbs: list[str] = param.List(item_type=str, default=[])
+    selected_rows: list[int] = param.List(item_type=int, default=[])
+    paths_to_copy: list[Path] = param.List(item_type=Path, default=[])
+    paths_to_move: list[Path] = param.List(item_type=Path, default=[])
+
+    open_modal = param.Action()
+    close_modal = param.Action()
+    modal_view = param.Parameter()
+
+    def __init__(self, **params):
+        super().__init__(**params)
+        self.file_input = pn.widgets.FileInput.from_param(
+            self.param.file_,
+        )
+        self.current_paths_df = _paths_in_path_df(self.current_dir)
+        self.upload_file = self._action_upload_file
+        self.settings_panel = pn.Column(
+            self.file_input,
+            pn.widgets.Button.from_param(
+                self.param.upload_file,
+                button_type='primary',
+                icon='upload'),
+        )
+        self.table = None
+
+    def _action_upload_file(self, *_) -> None:
+        if self.file_input.value:
+            filename = self.file_input.filename
+            self.file_input.clear()
+            if (self.current_dir / filename).exists():
+                self.param.update(
+                    file_=None,
+                    alerts=[
+                        pn.pane.Alert(
+                            f'¡El archivo {filename} ya existe!',
+                            alert_type='danger')])
+            else:
+                with open(self.current_dir / filename, 'wb') as file:
+                    file.write(self.file_input.value)
+                self.param.update(
+                    file_=None,
+                    alerts=[
+                        pn.pane.Alert(
+                            f'¡Se ha subido `{filename}` con éxito!',
+                            alert_type='success')],
+                    current_paths_df=_paths_in_path_df(self.current_dir))
+
+    def _action_delete_files(
+            self, *_, paths: list[Path], confirmed: bool = False) -> None:
+        self.alerts = []
+        if not confirmed:
+            ok_button = pn.widgets.Button(
+                name='Eliminar',
+                icon='trash',
+                button_type='danger')
+            ok_button.on_click(lambda *_: self._action_delete_files(
+                *_, paths=paths, confirmed=True))
+            self.modal_view = pn.Column(
+                pn.pane.Markdown(
+                    '¿Está seguro de eliminar estos archivos/carpetas?\n' +
+                    '\n'.join([f'- `{f.name}`' for f in paths])
+                ),
+                pn.Row(
+                    ok_button,
+                    pn.widgets.Button.from_param(
+                        self.param.close_modal,
+                        name='Cancelar',
+                        button_type='light'),
+                )
+            )
+            self.open_modal(_)
+            return
+
+        deleted_files = []
+        for f in paths:
+            print(f'deleting {f}')
+            if f.is_dir():
+                try:
+                    f.rmdir()
+                except OSError as e:
+                    if e.errno == 39:
+                        error = f'# ¡La carpeta `{f.name}` no está vacía!'
+                    else:
+                        raise
+                    self._show_error(error=error)
+                    return
+            else:
+                f.unlink()
+            deleted_files.append(f.name)
+        self.close_modal(_)
+        self.param.update(
+            alerts=[
+                pn.pane.Alert(
+                    f'Se han eliminado correctamente: `{
+                      ", ".join(deleted_files)}`',
+                    alert_type='success')],
+            current_paths_df=_paths_in_path_df(self.current_dir))
+
+    def _action_create_folder(
+            self, *_, path: Path, name: str = None, confirmed: bool = False
+            ) -> None:
+        self.alerts = []
+        if not confirmed:
+            text_input = pn.widgets.TextInput(
+                name='Nombre de la carpeta',
+                placeholder='Introduzca el nombre...')
+            ok_button = pn.widgets.Button(
+                name='Crear',
+                icon='folder-plus',
+                button_type='primary')
+            ok_button.on_click(lambda *_: self._action_create_folder(
+                *_, path=path, name=text_input.value, confirmed=True))
+            self.modal_view = pn.Column(
+                pn.pane.Markdown(
+                    'Nombre de la carpeta'),
+                text_input,
+                pn.Row(
+                    ok_button,
+                    pn.widgets.Button.from_param(
+                        self.param.close_modal,
+                        name='Cancelar',
+                        button_type='light'),
+                )
+            )
+            self.open_modal(_)
+            return
+
+        (path / Path(name)).mkdir(exist_ok=True)
+        self.close_modal(_)
+        self.param.update(
+            alerts=[
+                pn.pane.Alert(
+                    f'Se han creado correctamente la carpeta: `{name}`',
+                    alert_type='success')],
+            current_paths_df=_paths_in_path_df(self.current_dir))
+
+    def _action_rename_path(
+            self, *_, path: Path, name: str = None, confirmed: bool = False
+            ) -> None:
+        self.alerts = []
+        if not confirmed:
+            text_input = pn.widgets.TextInput(
+                name='Renombrar a',
+                placeholder='Introduzca el nombre...')
+            ok_button = pn.widgets.Button(
+                name='Renombrar',
+                icon='folder-plus',
+                button_type='primary')
+            ok_button.on_click(lambda *_: self._action_rename_path(
+                *_, path=path, name=text_input.value, confirmed=True))
+            self.modal_view = pn.Column(
+                pn.pane.Markdown(
+                    f'Renombrar `{path.name}`'),
+                text_input,
+                pn.Row(
+                    ok_button,
+                    pn.widgets.Button.from_param(
+                        self.param.close_modal,
+                        name='Cancelar',
+                        button_type='light'),
+                )
+            )
+            self.open_modal(_)
+            return
+
+        shutil.move(path, path.parent / name)
+        self.close_modal(_)
+        self.param.update(
+            alerts=[
+                pn.pane.Alert(
+                    f'Se ha renombrado `{path.name}` a `{name}`',
+                    alert_type='success')],
+            current_paths_df=_paths_in_path_df(self.current_dir))
+
+    def _show_error(
+            self, *_, error: str = None, confirmed: bool = False) -> None:
+        if not confirmed:
+            self.close_modal(_)
+            ok_button = pn.widgets.Button(
+                name='Aceptar',
+                button_type='primary')
+            ok_button.on_click(lambda *_: self._show_error(
+                *_, confirmed=True))
+            self.modal_view = pn.Column(error, ok_button)
+            self.open_modal(_)
+            return
+        self.close_modal(_)
+
+    def _change_dir(self, *_, folder: Path) -> None:
+        self.alerts = []
+        breadcrumbs = [p for p in folder.parts[len(self.root_dir.parts):]]
+        self.param.update(
+            current_dir=folder,
+            current_paths_df=_paths_in_path_df(folder),
+            selected_rows=[],
+            breadcrumbs=breadcrumbs)
+
+    def get_selected_paths(self) -> list[Path]:
+        return [self.current_paths_df.iloc[s]['path']
+                for s in self.tabulator.selection]
+
+    def create_folder_button(self) -> pn.widgets.Button:
+        create_folder_button = pn.widgets.Button(
+            icon='folder-plus', name='Crear carpeta',
+            width=120)
+        pn.bind(
+            self._action_create_folder, create_folder_button,
+            path=self.current_dir, watch=True)
+        return create_folder_button
+
+    def cut_button(self) -> pn.widgets.Button:
+        def cut_paths(*_) -> None:
+            self.param.update(
+                paths_to_copy=[],
+                paths_to_move=self.get_selected_paths(),
+                selected_rows=[])
+            print('move paths', self.paths_to_move)
+        cut_button = pn.widgets.Button(
+            icon='file-scissors', disabled=not bool(self.selected_rows),
+            name='Cortar', width=120)
+        pn.bind(cut_paths, cut_button, watch=True)
+        return cut_button
+
+    def copy_button(self) -> pn.widgets.Button:
+        def copy_paths(*_) -> None:
+            paths_to_copy = self.get_selected_paths()
+            self.param.update(
+                alerts=[
+                    pn.pane.Alert(
+                        f'Se han copiado ({len(paths_to_copy)} archivo/s): '
+                        f'`{", ".join([
+                            p.name for p in paths_to_copy])}`',
+                        alert_type='success')],
+                paths_to_move=[],
+                paths_to_copy=paths_to_copy,
+                selected_rows=[])
+            print('copy paths', self.paths_to_copy)
+        copy_button = pn.widgets.Button(
+            icon='copy', disabled=not bool(self.selected_rows),
+            name='Copiar', width=120)
+        pn.bind(copy_paths, copy_button, watch=True)
+        return copy_button
+
+    def paste_button(self) -> pn.widgets.Button:
+        def paste_paths(*_) -> None:
+            print('paste paths', self.paths_to_copy, self.paths_to_move)
+            paths = self.paths_to_copy or self.paths_to_move
+            if self.paths_to_copy:
+                for path in self.paths_to_copy:
+                    dst = self.current_dir / path.name
+                    while dst.exists():
+                        dst = self.current_dir / ('Copia de ' + dst.name)
+                    if path.is_file():
+                        shutil.copy(path, dst)
+                    else:
+                        shutil.copytree(path, dst)
+            else:
+                for path in self.paths_to_move:
+                    dst = self.current_dir / path.name
+                    while dst.exists():
+                        dst = self.current_dir / ('Copia de ' + dst.name)
+                    shutil.move(path, dst)
+            self.param.update(
+                alerts=[
+                    pn.pane.Alert(
+                        f'Se han pegado ({len(paths)} archivo/s): '
+                        f'`{", ".join([
+                            p.name for p in paths])}`',
+                        alert_type='success')],
+                paths_to_copy=[],
+                paths_to_move=[],
+                selected_rows=[],
+                current_paths_df=_paths_in_path_df(self.current_dir))
+        paste_button = pn.widgets.Button(
+            icon='clipboard', name='Pegar', width=120,
+            disabled=not bool(self.paths_to_copy)
+            and not bool(self.paths_to_move))
+        pn.bind(paste_paths, paste_button, watch=True)
+        return paste_button
+
+    def rename_button(self) -> pn.widgets.Button:
+        def rename_path(*_) -> None:
+            if self.tabulator.selection:
+                paths = self.get_selected_paths()
+                if len(paths) > 1:
+                    self._show_error(
+                        error='¡Solamente se pueden renombrar '
+                        'archivos de uno en uno!')
+                else:
+                    self._action_rename_path(
+                        path=self.get_selected_paths()[0])
+                    self.selected_rows = []
+        rename_button = pn.widgets.Button(
+            icon='pencil-minus', disabled=not bool(self.selected_rows),
+            name='Renombrar', width=120)
+        pn.bind(rename_path, rename_button, watch=True)
+        return rename_button
+
+    def delete_button(self) -> pn.widgets.Button:
+        def delete_paths(*_) -> None:
+            if self.tabulator.selection:
+                self._action_delete_files(
+                    paths=self.get_selected_paths())
+                self.selected_rows = []
+        delete_button = pn.widgets.Button(
+            icon='trash', name='Eliminar',
+            disabled=not bool(self.selected_rows),
+            button_type='danger', width=120)
+        pn.bind(delete_paths, delete_button, watch=True)
+        return delete_button
+
+    def download_button(self) -> pn.widgets.Button:
+        def download_file(*_) -> BytesIO:
+            paths = self.get_selected_paths()
+            bio = BytesIO()
+            if len(paths) == 1 and paths[0].is_file():
+                print(f'downloading {paths[0]}')
+                download_button.filename = paths[0].name
+                bio.write(open(paths[0], 'rb').read())
+            else:
+                print(f'downloading {', '.join(map(str, paths))}')
+                download_button.filename = (
+                    paths[0].name if len(paths) == 1 else 'descarga') + '.zip'
+                with zipfile.ZipFile(bio, 'w', zipfile.ZIP_DEFLATED) as zipf:
+                    for path in paths:
+                        if path.is_file():
+                            zipf.write(
+                                path,
+                                arcname=path.relative_to(self.current_dir))
+                        else:
+                            for root, dirs, files in path.walk():
+                                for f in files:
+                                    zipf.write(
+                                        root / f,
+                                        arcname=(root / f).relative_to(
+                                            self.current_dir))
+            bio.seek(0)
+            return bio
+        download_button = pn.widgets.FileDownload(
+            callback=download_file, filename='',
+            disabled=not bool(self.selected_rows),
+            icon='download', label='Descargar', width=120)
+        return download_button
+
+    @pn.depends('selected_rows', 'paths_to_move', 'paths_to_copy')
+    def tools(self) -> pn.Column:
+        # for ButtonIcon search icons in https://tabler.io/icons
+        return pn.FlexBox(
+            self.create_folder_button(),
+            self.copy_button(),
+            self.cut_button(),
+            self.paste_button(),
+            self.rename_button(),
+            self.delete_button(),
+            self.download_button(),
+        )
+
+    @pn.depends('current_paths_df', 'selected_rows', 'alerts')
+    def view(self) -> pn.Column:
+        if not self.current_dir.samefile(self.root_dir):
+            go_to_parent_button = pn.widgets.ButtonIcon(
+                icon='folder-up', size='2em', width=10)
+            pn.bind(self._change_dir, go_to_parent_button,
+                    folder=self.current_dir.parent, watch=True)
+            go_to_parent = [go_to_parent_button]
+        else:
+            go_to_parent = []
+
+        def change_dir(value: pn.models.tabulator.CellClickEvent) -> None:
+            row = self.current_paths_df.iloc[value.row]
+            if row['path'].is_dir():
+                self._change_dir(
+                    folder=self.current_paths_df.iloc[value.row]['path'])
+
+        def on_row_selected(event) -> None:
+            self.selected_rows = event.obj.selection
+        # search for icons here: https://fontawesome.com/icons
+        self.tabulator = pn.widgets.Tabulator(
+            self.current_paths_df
+            .assign(
+                icon=lambda x: x['path'].map(_filename_icon),
+                formatted_size=lambda x: x['size'].map(_human_readable_size))
+            [['icon', 'name', 'mdate', 'formatted_size']],
+            disabled=True,
+            formatters={
+                'icon': 'html',
+                'mdate': DateFormatter(format='%d-%m-%Y %H:%M:%S'),
+                'size': {'type': 'money', 'decimal': ',', 'precision': 0,
+                         'thousand': '.', 'symbol': '', 'align': 'right'}},
+            hidden_columns=['path', 'size'],
+            on_click=change_dir,
+            selectable='checkbox-single',
+            selection=self.selected_rows,
+            show_index=False,
+            sortable={'icon': False},
+            text_align={'formatted_size': 'right'},
+            theme='fast',
+            titles={
+                'icon': '',
+                'name': 'Nombre',
+                'mdate': 'Fecha modificación',
+                'formatted_size': 'Tamaño'}
+        )
+        self.tabulator.param.watch(on_row_selected, 'selection')
+
+        return pn.Column(
+            *self.alerts,
+            self.tools,
+            pn.Row(
+                *go_to_parent,
+                pn.pane.Markdown(
+                    ' / ' + ' / '.join(self.breadcrumbs),
+                    align=('start', 'start')),
+                sizing_mode='stretch_width'),
+            # *entries,
+            self.tabulator,
+            scroll=True)
+
+    @pn.depends('modal_view')
+    def modal(self) -> pn.Column:
+        return self.modal_view
+
+
+@site.add(APPLICATION)
+def view() -> pn.Column:
+    """returns a servable Template"""
+    pn.config.sizing_mode = "stretch_width"
+    app = ManageAppsApp(
+        name=APPLICATION.name,
+        open_modal=lambda event: template.open_modal(),
+        close_modal=lambda event: template.close_modal())
+    template = MyMaterialTemplate(title=APPLICATION.name)
+    template.append_sidebar(pn.pane.HTML('<hr/>'))
+    template.append_sidebar(app.settings_panel)
+    template.main.append(app.view)
+    template.modal.append(app.modal)
+    return template
+
+
+if __name__.startswith("bokeh"):
+    view().servable()

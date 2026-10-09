@@ -1,0 +1,98 @@
+---
+# Setup Docker
+#
+- name: "Docker: Ensure dependencies are installed"
+  ansible.builtin.apt:
+    name:
+      - apt-transport-https
+      - ca-certificates
+      - python3-jsondiff
+      - python3-docker
+      - gnupg
+    state: present
+  tags:
+    - docker
+
+# - name: "Docker: Install support Python Packages"
+#   ansible.builtin.pip:
+#     name:
+#       - docker
+#       - jsondiff
+#     state: present
+#     extra_args: --user
+#   tags:
+#     - docker
+
+- name: "Docker: Setup Repository"
+  block:
+    - name: "Docker: Download ASCII armored key"
+      ansible.builtin.get_url:
+        url: "{{ repo_key_url }}"
+        dest: "/etc/apt/trusted.gpg.d/{{ repo_key_name }}.asc"
+        owner: root
+        group: root
+        mode: "0644"
+      register: key_file
+
+    - name: "Docker: Convert Docker GPG key to binary"
+      ansible.builtin.command:
+        cmd: >
+          gpg --dearmor
+          -o /etc/apt/trusted.gpg.d/{{ repo_key_name }}.gpg
+          /etc/apt/trusted.gpg.d/{{ repo_key_name }}.asc
+      when: key_file.changed
+
+    - name: "Docker: Ensure permissions on Docker GPG key"
+      ansible.builtin.file:
+        path: "/etc/apt/trusted.gpg.d/{{ repo_key_name }}.gpg"
+        owner: root
+        group: root
+        mode: "0644"
+      
+    - name: "Docker: Add Repository (amd64)"
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=amd64] https://download.docker.com/linux/{{ ansible_facts['lsb'].id | lower }} {{ ansible_facts['lsb'].codename }} stable"
+        state: present
+        filename: 'docker'
+
+    - name: "Docker: Add Repository (arm64)"
+      ansible.builtin.apt_repository:
+        repo: "deb [arch=arm64] https://download.docker.com/linux/{{ ansible_facts['lsb'].id | lower }} {{ ansible_facts['lsb'].codename }} stable"
+        state: present
+        filename: 'docker'
+  vars:
+    repo_key_url: "https://download.docker.com/linux/{{ ansible_facts['lsb'].id | lower }}/gpg"
+    repo_key_name: "docker"
+  tags:
+    - docker
+
+- name: "Docker: Setup Packages"
+  block:
+    - name: "Docker: Remove old packages"
+      ansible.builtin.apt:
+        name:
+          - docker
+          - docker-engine
+        state: absent
+
+    - name: "Docker: Install packages"
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          #- docker-compose
+        state: present
+        update_cache: true
+  tags:
+    - docker
+
+- name: "Docker: Setup Service"
+  block:
+    - name: "Docker: Service is started and enabled at boot"
+      ansible.builtin.service:
+        name: docker
+        state: started
+        enabled: true
+  tags:
+    - docker
