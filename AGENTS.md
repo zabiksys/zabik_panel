@@ -1,4 +1,4 @@
-# AGENTS.md — bizak-panel
+# AGENTS.md — panel-app
 
 ## Project Overview
 
@@ -104,6 +104,24 @@ google_drive_oauth:
 - The callback endpoint `/gdrive_callback` is served as an `extra_pattern` by the Bokeh server (see `main.py`).
 - Tokens are refreshed silently via `google.auth.transport.requests.Request()` when expired.
 
+## Versionado
+
+**Recordatorio al cambiar la versión de la app:**
+
+1. Actualizar `version` en `pyproject.toml`.
+2. Actualizar `panel_app_version` en
+   `devops/inventory/group_vars/all/panel.yml` (debe coincidir con
+   `pyproject.toml`).
+3. Ejecutar `uv lock` (el lock guarda la versión del paquete raíz).
+4. Añadir la entrada correspondiente en `CHANGELOG.md`.
+5. Si se actualizan Panel o Python, actualizar también
+   `panel_panel_version` / `panel_python_version` en el mismo `panel.yml`.
+6. El tag de la imagen es `<app>-panel-<panel>-python-<python>`; al cambiar la
+   versión cambia el tag y `make server-setup` reconstruye la imagen.
+
+El diálogo "Acerca de..." lee la versión de `pyproject.toml` en tiempo de
+ejecución, así que no hace falta tocar código para cambiarla.
+
 ## Testing
 
 - Single test file: `tests/test_param_cache.py`
@@ -119,7 +137,7 @@ google_drive_oauth:
 ## Docker
 
 ```bash
-docker build -t bizak-panel .
+docker build -t panel-app .
 # Volumes: /app/config, /app/application/notebooks
 # Default port: 5006
 ```

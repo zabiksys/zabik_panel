@@ -9,6 +9,7 @@ from application.config.config import Config
 from panel.template.base import FAVICON_URL, Template
 
 from my_panel_extensions.site.models import Application
+from my_panel_extensions.user import about_dialog_html, current_user
 
 ROOT = pathlib.Path(__file__).parent
 CSS = (ROOT / "gallery_template.css").read_text()
@@ -149,6 +150,10 @@ class GalleryTemplate(Template):
         self.add_variable("meta_viewport", self.meta_viewport)
 
         self.add_variable("footer", self.footer)
+
+        self.add_variable("user", current_user())
+        self.add_variable("logout_url", "/logout")
+        self.add_variable("about_dialog", about_dialog_html("gallery-about-dialog"))
 
     @property
     def _head_title(self):

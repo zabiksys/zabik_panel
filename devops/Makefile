@@ -51,8 +51,10 @@ YELLOW=`tput setaf 3`
 # Add the following 'help' target to your Makefile
 # And add help text after each target name starting with '\#\#'
 .PHONY: help
+# Sin -x: evita que make help muestre las líneas de trazado del shell
+help: .SHELLFLAGS := -eu -o pipefail -O inherit_errexit -c
 help: ## This help message
-	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(DEVOPS_DIR)/Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: clean
 clean: ## remove all build, test, coverage and Python artifacts
@@ -61,7 +63,8 @@ clean: ## remove all build, test, coverage and Python artifacts
 
 bin/pip:
 	@echo "$(GREEN)==> Python: Setup Virtual Env$(RESET)"
-	python3 -m venv .
+	# --without-scm-ignore-files evita que venv sobrescriba devops/.gitignore
+	python3 -m venv --without-scm-ignore-files .
 	bin/pip install -U pip pipx
 
 bin/ansible:

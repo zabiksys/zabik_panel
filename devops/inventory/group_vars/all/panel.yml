@@ -1,7 +1,12 @@
 ---
 panel_project: "{{ lookup('ansible.builtin.env', 'PANEL_PROJECT', default='zabik') }}"
 panel_prefix: "{{ lookup('ansible.builtin.env', 'PANEL_IMAGE_PREFIX', default='zabik') }}"
-panel_docker_image: "{{ panel_prefix }}/panel:1.9.4-python-3.13-4"
+# Mantener sincronizado con `version` en pyproject.toml (ver AGENTS.md > Versionado)
+panel_app_version: "1.0.1"
+panel_panel_version: "1.9.4"
+panel_python_version: "3.13"
+panel_docker_image: >-
+  {{ panel_prefix }}/panel:{{ panel_app_version }}-panel-{{ panel_panel_version }}-python-{{ panel_python_version }}
 panel_default_network: "{{ panel_project }}-panel"
 panel_port: "{{ lookup('ansible.builtin.env', 'PANEL_PORT', default='5006') }}"
 panel_bokeh_port: "{{ lookup('ansible.builtin.env', 'PANEL_BOKEH_PORT', default='5006') }}"

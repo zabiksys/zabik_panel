@@ -1,6 +1,7 @@
 [project]
-name = "bizak-panel"
-version = "0.2.0"
+name = "panel-app"
+# Mantener sincronizado con panel_app_version en devops/inventory/group_vars/all/panel.yml
+version = "1.0.1"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"

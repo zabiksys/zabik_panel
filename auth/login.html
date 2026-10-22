@@ -69,12 +69,9 @@
                 <h3><img src="https://static.bokeh.org/logos/logotype.svg"></h3>
                 <p> Login to access your application</p>
             </div>
-            <!--Email Input-->
+            <!--Username Input-->
             <div class="form-group">
-                <input name="domain" type="text" class="form-input" autocapitalize="off" autocorrect="off" placeholder="domain" value="{{ domain }}">
-            </div>
-            <div class="form-group">
-                <input name="username" type="text" class="form-input" autocapitalize="off" autocorrect="off" placeholder="username">
+                <input name="username" type="text" class="form-input" autocapitalize="off" autocorrect="off" placeholder="usuario">
             </div>
             <!--Password Input-->
             <div class="form-group">
@@ -85,12 +82,6 @@
                 <button class="form-button" type="submit">Login</button>
             </div>
             <span class="errormessage">{{errormessage}}</span>
-            <div><small>
-            <p>This is a toy example demonstrating the use of authentication hooks with a Bokeh server.
-            You can log in with user: <b><i>bokeh</i></b> / pass: <b><i>bokeh</i></b></p>
-
-            <p><a href="https://docs.bokeh.org/en/latest/docs/user_guide/server.html#authentication">See the documentation</a> for a full discussion.</p>
-            </small></div>
         </form>
     </div>
 </body>

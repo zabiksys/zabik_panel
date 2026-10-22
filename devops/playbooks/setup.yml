@@ -39,6 +39,8 @@
         ansible.builtin.synchronize:
           src: "{{ playbook_dir }}/../../"
           dest: "{{ build_directory }}"
+          # synchronize no templa ansible_port; se resuelve aquí explícitamente
+          dest_port: "{{ lookup('ansible.builtin.env', 'DEPLOY_PORT') | default('22222', true) | int }}"
         become: no
 
       # - name: Clone panel src
