@@ -41,6 +41,28 @@ endif
 DOCKER=docker
 DOCKER_CMD_CONTEXT=${DOCKER} --context ${CONTEXT}
 
+# Limitar la ejecución a un host o grupo: make server-setup LIMIT=tebe
+LIMIT ?= $(CONTEXT)
+LIMIT_OPTS = $(if $(strip $(LIMIT)),--limit $(strip $(LIMIT)),)
+
+# Ejecutar sólo algunas etiquetas: make server-setup TAGS=base
+TAGS ?=
+TAGS_OPTS = $(if $(strip $(TAGS)),--tags $(strip $(TAGS)),)
+
+# Omitir etiquetas: make server-setup SKIP_TAGS=docker
+SKIP_TAGS ?=
+SKIP_TAGS_OPTS = $(if $(strip $(SKIP_TAGS)),--skip-tags $(strip $(SKIP_TAGS)),)
+
+# Simulación (dry run): make server-setup CHECK=1
+CHECK ?=
+CHECK_OPTS = $(if $(filter-out 0 false no,$(strip $(CHECK))),--check,)
+
+# Verbosidad de Ansible (0-4): make server-setup VERBOSITY=2
+VERBOSITY ?=
+VERBOSITY_OPTS = $(if $(strip $(VERBOSITY)),-$(strip $(VERBOSITY)),)
+
+ANSIBLE_OPTS = $(LIMIT_OPTS) $(TAGS_OPTS) $(SKIP_TAGS_OPTS) $(CHECK_OPTS) $(VERBOSITY_OPTS)
+
 # We like colors
 # From: https://coderwall.com/p/izxssa/colored-makefile-for-golang-projects
 RED=`tput setaf 1`
@@ -55,6 +77,16 @@ YELLOW=`tput setaf 3`
 help: .SHELLFLAGS := -eu -o pipefail -O inherit_errexit -c
 help: ## This help message
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(DEVOPS_DIR)/Makefile | sort | awk 'BEGIN {FS = ":.*?## "}; {printf "\033[36m%-30s\033[0m %s\n", $$1, $$2}'
+	@printf '\n\033[1mOpciones\033[0m (usar como: make server-setup VAR=valor)\n'
+	@printf '  \033[36m%-30s\033[0m %s\n' 'LIMIT=<host|grupo>' 'Limita la ejecución (por defecto: $(CONTEXT))'
+	@printf '  \033[36m%-30s\033[0m %s\n' 'TAGS=<tag[,tag]>' 'Ejecuta sólo estas etiquetas'
+	@printf '  \033[36m%-30s\033[0m %s\n' 'SKIP_TAGS=<tag[,tag]>' 'Omite estas etiquetas'
+	@printf '  \033[36m%-30s\033[0m %s\n' 'CHECK=1' 'Modo simulación (dry run)'
+	@printf '  \033[36m%-30s\033[0m %s\n' 'VERBOSITY=<0-4>' 'Verbosidad de Ansible'
+	@printf '\n\033[1mEjemplos\033[0m\n'
+	@printf '  make server-setup\n'
+	@printf '  make server-setup LIMIT=tebe CHECK=1\n'
+	@printf '  make server-setup TAGS=docker\n'
 
 .PHONY: clean
 clean: ## remove all build, test, coverage and Python artifacts
@@ -79,4 +111,4 @@ setup: bin/pip ## Ansible: Install Ansible and dependencies
 .PHONY: server-setup
 server-setup: bin/ansible ## Server: Configure a remote server
 	@echo "$(GREEN)==> Server: Configure a remote server with Ansible$(RESET)"
-	./bin/ansible-playbook playbooks/setup.yml --limit ${CONTEXT}
+	./bin/ansible-playbook playbooks/setup.yml $(ANSIBLE_OPTS)

@@ -1,7 +1,7 @@
 [project]
 name = "panel-app"
 # Mantener sincronizado con panel_app_version en devops/inventory/group_vars/all/panel.yml
-version = "1.0.1"
+version = "1.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"

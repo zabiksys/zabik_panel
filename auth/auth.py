@@ -9,6 +9,7 @@ import tornado
 import sys
 
 sys.path.append(str(Path(__file__).parent))
+from auth_settings import get_ad_settings
 from application.config.config import Config
 
 logger = logging.getLogger(__name__)
@@ -21,35 +22,6 @@ def _normalize_username(username: str) -> str:
     elif '@' in username:
         username = username.split('@', 1)[0]
     return username
-
-
-def _ad_settings() -> dict:
-    """Devuelve la configuración de AD normalizada.
-
-    `domain` es el nombre DNS del dominio (se usa para localizar el dominio y
-    construir los DN). Para el bind simple contra AD hay dos formatos válidos:
-
-    - `upn`: `usuario@local.zabik`, usa el DNS y no necesita NetBIOS.
-    - `netbios`: `DOMINIO\\usuario` (down-level), necesita `netbios_name`
-      porque el nombre NetBIOS no tiene por qué coincidir con el DNS
-      (p.ej. DNS `local.zabik` vs NetBIOS `DOMGSMNT`).
-
-    Compatibilidad con configuraciones antiguas:
-    - Si no existe `login_format`, se deduce: `netbios` cuando `domain` no
-      tiene punto (p.ej. `DOMGSMNT`) o hay `netbios_name`; `upn` en caso
-      contrario.
-    - Si no existe `encrypt_connections`, se usa LDAP plano (como antes).
-    """
-    ad_config = dict(Config()['active_directory'])
-    login_format = ad_config.get('login_format')
-    if not login_format:
-        domain = str(ad_config.get('domain', ''))
-        if ad_config.get('netbios_name') or (domain and '.' not in domain):
-            login_format = 'netbios'
-        else:
-            login_format = 'upn'
-    ad_config['login_format'] = str(login_format).lower()
-    return ad_config
 
 
 def _ad_username(username: str, ad_config: dict) -> str:
@@ -91,17 +63,16 @@ class LoginHandler(RequestHandler):
         self.render("login.html", errormessage=errormessage)
 
     def check_permission(self, username, password):
-        ad_config = _ad_settings()
+        ad_config = get_ad_settings()
         dns_domain = ad_config['domain']
         extra = {}
         if ad_config.get('netbios_name'):
             extra['netbios_name'] = ad_config['netbios_name']
         addomain = ADDomain(
             dns_domain,
-            # Por defecto LDAP plano: así una configuración antigua sin la clave
-            # se comporta como antes. Las configuraciones nuevas deben poner
-            # `encrypt_connections: true`.
-            encrypt_connections=ad_config.get('encrypt_connections', False),
+            # Por defecto LDAP plano; se recomienda
+            # PANELAPP_LDAP_ENCRYPT_CONNECTIONS=true.
+            encrypt_connections=ad_config['encrypt_connections'],
             ldap_servers_or_uris=ad_config['ldap_uris'],
             **extra)
         user = _ad_username(username, ad_config)

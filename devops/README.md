@@ -27,3 +27,17 @@ ANSIBLE_REMOTE_PORT=22
 ```
 make server-setup
 ```
+
+`make server-setup` acepta opciones de Ansible:
+
+- `LIMIT=<host|grupo>`: limita la ejecución (por defecto el entorno, p. ej. `prod`).
+- `CHECK=1`: modo simulación (dry run).
+- `TAGS=<tag[,tag]>` / `SKIP_TAGS=<tag[,tag]>`: ejecutar u omitir etiquetas.
+- `VERBOSITY=<0-4>`: verbosidad de Ansible.
+
+```
+make server-setup LIMIT=tebe CHECK=1
+make server-setup TAGS=docker
+```
+
+`make help` muestra las opciones disponibles.

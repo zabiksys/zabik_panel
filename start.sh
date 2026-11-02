@@ -5,6 +5,8 @@ set -a
 [ -f .env ] && . ./.env
 set +a
 : "${BOKEH_COOKIE_SECRET:?Define BOKEH_COOKIE_SECRET en el .env de la raíz (ver .env_dist)}"
+: "${PANELAPP_LDAP_DOMAIN:?Define PANELAPP_LDAP_DOMAIN en el .env de la raíz (ver .env_dist)}"
+: "${PANELAPP_LDAP_URIS:?Define PANELAPP_LDAP_URIS en el .env de la raíz (ver .env_dist)}"
 
 export BOKEH_ADDRESS=0.0.0.0
 export BOKEH_PORT=5006

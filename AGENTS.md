@@ -18,10 +18,31 @@ uv run pytest tests/test_param_cache.py  # run single test file
 ## Environment Variables (required to run)
 
 Set by `start.sh` before launching:
-- `PANEL_CONFIG_PATH` → `config/.secrets.yaml` (gitignored, contains AD config, user permissions)
+- `PANEL_CONFIG_PATH` → `config/.secrets.yaml` (gitignored; contiene permisos de
+  usuarios y otros secretos, ya **no** la configuración de AD)
 - `PANEL_CACHE_PATH` → `config/panelindexcache`
 - `PANEL_NOTEBOOKS_DIR` → `notebooks/` (absolute path required)
 - `BOKEH_ADDRESS`, `BOKEH_PORT`, `BOKEH_ALLOW_WS_ORIGIN`, `BOKEH_AUTH_MODULE`, `BOKEH_COOKIE_SECRET`
+
+### Autenticación LDAP/AD
+
+La configuración de Active Directory se lee **exclusivamente** de variables de
+entorno con el prefijo `PANELAPP_LDAP_` (no hay fallback a
+`config/.secrets.yaml`):
+
+- `PANELAPP_LDAP_DOMAIN` (obligatoria): dominio DNS, p. ej. `local.zabik`.
+- `PANELAPP_LDAP_URIS` (obligatoria): URIs LDAP/LDAPS separadas por comas, p. ej.
+  `ldaps://dc1.local.zabik:636,ldaps://dc2.local.zabik:636`. También admite una
+  lista JSON.
+- `PANELAPP_LDAP_LOGIN_FORMAT` (opcional): `upn` o `netbios`. Si falta se deduce
+  (`netbios` si el dominio no tiene punto o hay `netbios_name`).
+- `PANELAPP_LDAP_NETBIOS_NAME` (opcional): nombre NetBIOS del dominio.
+- `PANELAPP_LDAP_ENCRYPT_CONNECTIONS` (opcional): `true`/`false`; por defecto
+  `false`. Recomendado `true`.
+
+Los valores se definen en el `.env` de la raíz (lo carga `start.sh` con
+`set -a`, y el `Makefile` de `devops` lo incluye y exporta para Ansible). Ver
+`.env_dist`.
 
 ## Architecture
 
@@ -29,8 +50,11 @@ Set by `start.sh` before launching:
 - **Routes**: `application/__init__.py` collects `view` callables from `application/pages/*/view.py` and auto-discovers notebooks from `notebooks/` via YAML manifests (`*.yml` with `url`, `name`, `notebook` fields)
 - **Pages**: each subdirectory under `application/pages/` exports a `view` (Panel component)
 - **Shared package**: `packages/my-panel-extensions/` — local workspace member providing `site` router, `ParamCache`, and other utilities
-- **Auth**: `auth/auth.py` — Bokeh `AuthModule` with AD login via `ms-active-directory`
-- **Config**: `Config` class reads YAML from `PANEL_CONFIG_PATH`; secrets file is gitignored
+- **Auth**: `auth/auth.py` — Bokeh `AuthModule` with AD login via
+  `ms-active-directory`. La configuración (dominio, URIs, formato de login) se
+  lee de `PANELAPP_LDAP_*` mediante `auth/auth_settings.py`.
+- **Config**: `Config` class reads YAML from `PANEL_CONFIG_PATH` (permisos de
+  usuarios y otros secretos); secrets file is gitignored
 - **Static files**: `assets/` and `notebooks/` served via `static_dirs`
 
 ### Repository Pattern (export_items)

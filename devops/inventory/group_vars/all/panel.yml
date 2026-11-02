@@ -2,7 +2,7 @@
 panel_project: "{{ lookup('ansible.builtin.env', 'PANEL_PROJECT', default='zabik') }}"
 panel_prefix: "{{ lookup('ansible.builtin.env', 'PANEL_IMAGE_PREFIX', default='zabik') }}"
 # Mantener sincronizado con `version` en pyproject.toml (ver AGENTS.md > Versionado)
-panel_app_version: "1.0.1"
+panel_app_version: "1.1.0"
 panel_panel_version: "1.9.4"
 panel_python_version: "3.13"
 panel_docker_image: >-
@@ -13,5 +13,11 @@ panel_bokeh_port: "{{ lookup('ansible.builtin.env', 'PANEL_BOKEH_PORT', default=
 panel_bokeh_allow_ws_origin: "{{ ansible_facts['fqdn'] }}:{{ panel_port }},panel.local.zabik:{{ panel_port }}"
 panel_bokeh_auth_module: auth/auth.py
 panel_bokeh_cookie_secret: "{{ lookup('ansible.builtin.env', 'BOKEH_COOKIE_SECRET') }}"
+# LDAP/AD: se leen del .env de la raíz (el Makefile lo incluye y exporta)
+panel_ldap_domain: "{{ lookup('ansible.builtin.env', 'PANELAPP_LDAP_DOMAIN') }}"
+panel_ldap_uris: "{{ lookup('ansible.builtin.env', 'PANELAPP_LDAP_URIS') }}"
+panel_ldap_login_format: "{{ lookup('ansible.builtin.env', 'PANELAPP_LDAP_LOGIN_FORMAT', default='upn') }}"
+panel_ldap_netbios_name: "{{ lookup('ansible.builtin.env', 'PANELAPP_LDAP_NETBIOS_NAME', default='') }}"
+panel_ldap_encrypt_connections: "{{ lookup('ansible.builtin.env', 'PANELAPP_LDAP_ENCRYPT_CONNECTIONS', default='true') }}"
 panel_config_volume: "{{ lookup('ansible.builtin.env', 'PANEL_CONFIG_VOLUME', default='panel_config_zabik') }}"
 panel_notebooks_volume: "{{ lookup('ansible.builtin.env', 'PANEL_NOTEBOOKS_VOLUME', default='panel_notebooks_zabik') }}"

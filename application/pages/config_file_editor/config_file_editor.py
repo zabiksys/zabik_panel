@@ -13,6 +13,9 @@ from template import MyMaterialTemplate
 from application.config.config import Config
 
 
+# El CodeEditor (Ace) necesita su extensión cargada para renderizar.
+pn.extension('codeeditor')
+
 SECRETS_FILE = 'config/.secrets.yaml'
 # icons http://www.dna.sm/icons.html
 # https://fontawesome.com/search?q=save&s=solid%2Cbrands

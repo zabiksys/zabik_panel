@@ -7,8 +7,21 @@ y este proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [1.1.0] - 2026-11-02
+
+### Added
+
+- Tests de la configuración LDAP (`tests/test_auth_settings.py`).
+
 ### Changed
 
+- La configuración de LDAP/AD ya no se lee de `config/.secrets.yaml`: ahora
+  llega por variables de entorno `PANELAPP_LDAP_*`, sin fallback a YAML.
+- `start.sh` valida `PANELAPP_LDAP_DOMAIN` y `PANELAPP_LDAP_URIS` al arrancar.
+- El despliegue Docker/Ansible pasa las variables `PANELAPP_LDAP_*` al
+  contenedor desde el `.env` de la raíz.
+- `devops/Makefile`: `make server-setup` acepta `LIMIT`, `CHECK`, `TAGS`,
+  `SKIP_TAGS` y `VERBOSITY`; `make help` documenta las opciones.
 - Migradas las plantillas de `template/__init__.py` (`MyMaterialTemplate`,
   `MyFastGridTemplate`, `MyFastListTemplate`, `MyBootstrapTemplate` y
   `MyVanillaTemplate`) de widgets de Panel a `panel_material_ui` (`pmui`):
@@ -19,6 +32,11 @@ y este proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 - Actualizado `notebooks/app_template.ipynb` para usar `panel_material_ui`:
   se importa `pmui`, `App.view()` devuelve `pmui.Column()` y el separador del
   sidebar usa `pmui.Divider()` en lugar de `pn.pane.HTML('<hr/>')`.
+
+### Fixed
+
+- `config_file_editor`: cargada la extensión `codeeditor` de Panel para que el
+  editor Ace se renderice (la página quedaba en blanco).
 
 ## [1.0.1] - 2026-10-22
 
