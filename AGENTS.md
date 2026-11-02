@@ -134,6 +134,37 @@ ejecución, así que no hace falta tocar código para cambiarla.
 - No linter, formatter, or typechecker configured
 - Python 3.13+
 
+## Skills de HoloViz (Panel/Param)
+
+El repo incluye el skill `developing-with-holoviz` en
+`.agents/skills/developing-with-holoviz/` (skill raíz + sub-skills en
+`skills/panel`, `skills/param`, `skills/holoviews`, `skills/hvplot`, etc.).
+OpenCode lo descubre automáticamente porque lee `.agents/skills/`.
+
+**Actualizar** (hay que instalarlo desde `main`: la versión publicada en PyPI
+todavía no acepta el nombre del skill como argumento y falla con
+`unrecognized arguments: developing`):
+
+```bash
+uvx --from git+https://github.com/holoviz-dev/holoviz-skills \
+  holoviz-skills update --agent
+```
+
+Para instalarlo de cero o comprobar el estado:
+
+```bash
+uvx --from git+https://github.com/holoviz-dev/holoviz-skills \
+  holoviz-skills install developing --agent
+uvx --from git+https://github.com/holoviz-dev/holoviz-skills holoviz-skills list
+```
+
+- `--agent` instala en `.agents/skills/` del proyecto (estándar cruzado, es la
+  ruta que lee OpenCode). Sin `--agent` la autodetección no reconoce OpenCode.
+- Para instalarlo global en el usuario: añadir `--global` (`~/.agents/skills/`).
+- Los sub-skills no se registran por separado: OpenCode solo registra el skill
+  raíz, que indica qué ficheros leer. Como el tool `skill` incluye el
+  `Base directory`, las rutas relativas de su tabla de carga resuelven bien.
+
 ## Docker
 
 ```bash
