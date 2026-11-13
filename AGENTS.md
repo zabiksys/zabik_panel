@@ -90,6 +90,48 @@ application/pages/export_items/
 
 **Field Selection Persistence**: User's selected export fields are stored per-user in `ParamCache2` at key `['export_items', username, 'selected_fields']`.
 
+### Filtros de usuario en Sellout complete
+
+`notebooks/sellout_complete/` lee los filtros por usuario de `filter:` en
+`config/.secrets.yaml` (vía `application.user_filter`):
+
+- `edi_partners`: limita los partners (grupos) que puede ver el usuario.
+- `extra_edi_partners`: partners adicionales que se suman a los de
+  `edi_partners`. Aparecen en el selector **Grupos** (marcados por defecto) y en
+  el gráfico de último sellout, pero **no** se incluyen en las hojas `Total`,
+  `Total importe` ni `Importe por línea`. Su hoja de cliente es la **reducida**:
+  sin las filas 2 y 3 (`Importe`, `Total unidades`) y sin las columnas
+  Inventario inicial, Sellin, Cartera de pedidos, Inventario calculado e
+  Inventario reportado por el cliente, ni las de comparativa con el año
+  anterior (`Total año ant.`, `YTD año ant.`, `% crecimiento` y semanas del año
+  anterior). Se marcan con el sufijo `~` en Grupos y en la pestaña de Excel
+  (`*` no es un carácter válido para nombres de hoja).
+- Si `edi_partners` no está definido, el usuario ve todos los partners y
+  `extra_edi_partners` se ignora (no habría hoja reducida).
+
+Los cambios del notebook se documentan en
+`notebooks/sellout_complete/CHANGELOG.md`.
+
+### Filtros de usuario en Dashboard comercial y Dashboard sellout
+
+`dashboard_comercial` y `dashboard_sellout` leen sus filtros por usuario de
+`users.<usuario>.filter` en `config/.secrets.yaml` mediante
+`application.user_filter`:
+
+- `account_manager` (`dashboard_comercial`): lista de códigos de
+  `dim_account_manager` (`FREGANO`, `JMP`, `OFC`, `PCF`, `TOB`). Restringe el
+  selector **KAMs** y todas las cifras del dashboard (ventas, pedidos,
+  presupuesto, vendedores y canales).
+- `edi_partners` (`dashboard_sellout`): lista de `dim_edi_partner.no_` (por
+  ejemplo `EDI0001`). Restringe el selector **Clientes** y los datos de sellout
+  e inventario.
+- Sin la clave, el usuario ve todos los KAMs/clientes.
+
+Los valores pueden ser un escalar o una lista; usar
+`user_filter_values('clave')` para normalizarlos. Si cambian los permisos, la
+caché de `user_params` descarta automáticamente las selecciones que ya no sean
+válidas.
+
 ### Locale System
 
 UI text uses a `_()` translation helper with `LOCALE = 'es'` constant at module level. All user-facing strings are looked up in `TRANSLATIONS` dict.

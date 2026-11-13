@@ -17,6 +17,29 @@ class UserParams:
     def __init__(self):
         self._synced = []
 
+    @staticmethod
+    def _sanitize_stored(
+            parameterized: param.Parameterized,
+            name: str,
+            stored_param: Any) -> Any | None:
+        """Descarta valores guardados que ya no están en ``objects``.
+
+        Las opciones de algunos selectores dependen de los datos (por ejemplo
+        los KAMs o los clientes que puede ver un usuario). Si cambian los
+        permisos o los datos, la caché puede contener valores inválidos y
+        ``param.update`` lanzaría ``ValueError``. Se conservan solo los valores
+        permitidos; si no queda ninguno se devuelve ``None`` para mantener el
+        valor por defecto.
+        """
+        objects = getattr(parameterized.param[name], 'objects', None)
+        if objects is None or callable(objects):
+            return stored_param
+        allowed = set(objects.values()) if isinstance(objects, dict) else set(objects)
+        if isinstance(stored_param, (list, tuple, set)):
+            filtered = [v for v in stored_param if v in allowed]
+            return filtered or None
+        return stored_param if stored_param in allowed else None
+
     def _apply_stored(
             self,
             parameterized: param.Parameterized,
@@ -48,6 +71,12 @@ class UserParams:
                 #     pass
                 # print(f'Applying {v} to `{p}`')
                 # setattr(parameterized, p, v)
+                stored_param = self._sanitize_stored(
+                    parameterized, p, stored_param)
+                if stored_param is None:
+                    logger.debug(
+                        f'stored param `{p}` discarded: no valid options')
+                    continue
                 apply_params[p] = stored_param
                 # setattr(parameterized, p, stored_param)
         logger.debug(f'apply_params {apply_params}')

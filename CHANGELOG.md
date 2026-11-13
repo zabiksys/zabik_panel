@@ -7,6 +7,34 @@ y este proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-13
+
+### Added
+
+- `application.user_filter.user_filter_values()`: normaliza los filtros por
+  usuario (escalar o lista) de `config/.secrets.yaml`.
+- Documentados en `AGENTS.md` los filtros por usuario de Sellout complete,
+  Dashboard comercial y Dashboard sellout.
+
+### Changed
+
+- Actualizado Panel 1.9.4 → 1.10.0 (Bokeh 3.10.2, panel-material-ui 0.16.7).
+- `pyproject.toml`: `panel==1.10.0` y `bokeh>=3.10.0`. Se deja de declarar
+  `panel-material-ui`, que llega como dependencia de Panel 1.10.
+- `devops/inventory/group_vars/all/panel.yml`: versiones de app y Panel
+  actualizadas (nuevo tag de imagen).
+
+### Fixed
+
+- `UserParams` descarta las selecciones cacheadas que ya no están entre las
+  opciones válidas (por ejemplo tras un cambio de permisos), evitando el
+  `ValueError` de `param.update`.
+
+### Removed
+
+- `requirements.txt`, `requirements_dev.txt`, `myapp/` y referencias
+  obsoletas en `Dockerfile`/playbook.
+
 ## [1.1.0] - 2026-11-02
 
 ### Added

@@ -182,10 +182,9 @@ css = [
 
 [[package]]
 name = "bokeh"
-version = "3.9.2"
+version = "3.10.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "contourpy" },
     { name = "jinja2" },
     { name = "narwhals" },
     { name = "numpy" },
@@ -195,9 +194,9 @@ dependencies = [
     { name = "tornado", marker = "sys_platform != 'emscripten'" },
     { name = "xyzservices" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/dd/6f/262b649ad2fdd5ed23341452eebfa669a73b0e0c739a369204d02ee2e201/bokeh-3.9.2.tar.gz", hash = "sha256:5be30d105b329d7d2ab1cb92f51e6bd44e23f0fe21ab8d49594b220b2ab11632", size = 5751825, upload-time = "2026-07-25T16:57:56.207Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/00/9f/76e8aaa9517278879568d568a58a4437a2eeddb88681382922c262c55acd/bokeh-3.10.2.tar.gz", hash = "sha256:d9fba1004fae149c6e6d54ba37410e52b8d4622ed5c6dad2220afa1b61362de0", size = 6060293, upload-time = "2026-11-05T18:31:20.653Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/0c/06a99ee998b1babf95074376cbf6ede5a86af726b12cbf47c4b84fa2803a/bokeh-3.9.2-py3-none-any.whl", hash = "sha256:448e07d5ee78231f5bdece3be020024bb98696c0d6b127e0e2df0b8ba8fa9765", size = 6409477, upload-time = "2026-07-25T16:57:54.62Z" },
+    { url = "https://files.pythonhosted.org/packages/82/5f/ff36efde54b136494f1badebb1e6290f7b0e40387b249f27faf4362b17b8/bokeh-3.10.2-py3-none-any.whl", hash = "sha256:511f0c3ecbd396012b65b677826c92ccfa4e951a25484da068fed46b1183b154", size = 6729346, upload-time = "2026-11-05T18:31:18.603Z" },
 ]
 
 [[package]]
@@ -1796,7 +1795,7 @@ wheels = [
 
 [[package]]
 name = "panel"
-version = "1.9.4"
+version = "1.10.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bokeh" },
@@ -1815,14 +1814,14 @@ dependencies = [
     { name = "tqdm" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/aa/cf/146a8c9e2bd262580e0cb328ca9526698eb164788526622495fef5efe422/panel-1.9.4.tar.gz", hash = "sha256:373bdb124c1b33c3dd4c112f348f4cfb2a7f1634b36a51e6ab01a4b5b6ec833c", size = 32246159, upload-time = "2026-08-17T12:33:33.342Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/ed/fc/5298a2bd42add8ef0deebef449bec09b8245a1d9cd750afe55d611245518/panel-1.10.0.tar.gz", hash = "sha256:ed4edce651ff08377e7927f53eccc425123a79db49afac0a7cae61436de61494", size = 22650960, upload-time = "2026-10-23T14:05:41.331Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8f/f5/e7baaa238f7f5b8790a27d1174f38e50e77c2d4860207dffac32ef1c0409/panel-1.9.4-py3-none-any.whl", hash = "sha256:c89c4c1e728297daf0628ea5070fb0da8ad77781e2a3142d302479537c1de6a4", size = 30334484, upload-time = "2026-08-17T12:33:30.519Z" },
+    { url = "https://files.pythonhosted.org/packages/1b/7c/6cc8758f4a38f597e2159a35a7940ed2d858028a85fe404010a97e745c84/panel-1.10.0-py3-none-any.whl", hash = "sha256:15c9f2bb58567a9e36a22396cb38776df77eb0cc52cd9a99cebb78424b0363c0", size = 20618587, upload-time = "2026-10-23T14:05:37.562Z" },
 ]
 
 [[package]]
 name = "panel-app"
-version = "1.1.0"
+version = "1.2.0"
 source = { virtual = "." }
 dependencies = [
     { name = "babel" },
@@ -1842,7 +1841,6 @@ dependencies = [
     { name = "pandas" },
     { name = "panel" },
     { name = "panel-graphic-walker" },
-    { name = "panel-material-ui" },
     { name = "papermill" },
     { name = "psycopg", extra = ["binary"] },
     { name = "pydantic" },
@@ -1863,7 +1861,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "babel", specifier = ">=2.17.0" },
-    { name = "bokeh", specifier = ">=3.7.3" },
+    { name = "bokeh", specifier = ">=3.10.0" },
     { name = "boto3", specifier = ">=1.42.55" },
     { name = "diskcache", specifier = ">=5.6.3" },
     { name = "google-api-python-client", specifier = ">=2.169.0" },
@@ -1877,9 +1875,8 @@ requires-dist = [
     { name = "nbconvert", specifier = ">=7.16.6" },
     { name = "openpyxl", specifier = ">=3.1.5" },
     { name = "pandas", specifier = ">=2.2.3" },
-    { name = "panel", specifier = "==1.9.4" },
+    { name = "panel", specifier = "==1.10.0" },
     { name = "panel-graphic-walker", specifier = ">=0.6.4" },
-    { name = "panel-material-ui", specifier = ">=0.12.0" },
     { name = "papermill", specifier = ">=2.6.0" },
     { name = "psycopg", extras = ["binary"], specifier = ">=3.3.6" },
     { name = "pydantic", specifier = ">=2.13.4" },
@@ -1912,16 +1909,16 @@ wheels = [
 
 [[package]]
 name = "panel-material-ui"
-version = "0.14.2"
+version = "0.16.7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "bokeh" },
     { name = "packaging" },
     { name = "panel" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9f/7d/7dbbda0e64527f87fae61561f87ef0d91cff7fd2f105ba5dc1d412ccddb4/panel_material_ui-0.14.2.tar.gz", hash = "sha256:4b4e9d6f771294d778b6c13ea77348a633d55e48264dfa803f4d8bbd9d5ebf6a", size = 3991585, upload-time = "2026-08-11T13:35:23.703Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/49/3e/91e06956e82e1805f0243a59acbd3ce040a7d021aa45116a58525c881675/panel_material_ui-0.16.7.tar.gz", hash = "sha256:2eb3fb21febe1173f72bd7db537d888a291406fa59e79f33519372ec415da995", size = 4125169, upload-time = "2026-11-02T21:07:43.802Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/8b/e3/524f051e605702b53d34560f6f5d79a7262589f750fdba14484e99b27548/panel_material_ui-0.14.2-py3-none-any.whl", hash = "sha256:726b9aecc675c03e2c0f823c03f9a20910052a9a0d2e10b0c4430bcacf824911", size = 1734158, upload-time = "2026-08-11T13:35:22.016Z" },
+    { url = "https://files.pythonhosted.org/packages/15/74/6116dda078f0817fb8175240cbba72e7a00ff6c84a99c86d5c6cbe60a8e5/panel_material_ui-0.16.7-py3-none-any.whl", hash = "sha256:7902181c044a334455f54d8090281489d1b86df0fdafa5ec127b3a76a680db05", size = 1796749, upload-time = "2026-11-02T21:07:41.774Z" },
 ]
 
 [[package]]

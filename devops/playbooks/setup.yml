@@ -51,7 +51,6 @@
       #   with_items:
       #     - application
       #     - auth
-      #     - myapp
       #     - packages
       #     - template
       #     - Dockerfile

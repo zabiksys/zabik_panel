@@ -1,13 +1,13 @@
 [project]
 name = "panel-app"
 # Mantener sincronizado con panel_app_version en devops/inventory/group_vars/all/panel.yml
-version = "1.1.0"
+version = "1.2.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "babel>=2.17.0",
-    "bokeh>=3.7.3",
+    "bokeh>=3.10.0",
     "boto3>=1.42.55",
     "diskcache>=5.6.3",
     "google-api-python-client>=2.169.0",
@@ -21,11 +21,9 @@ dependencies = [
     "nbconvert>=7.16.6",
     "openpyxl>=3.1.5",
     "pandas>=2.2.3",
-    #"panel==1.8.10",
-    "panel==1.9.4",
-    #"panel-material-ui>=0.8.0",
+    "panel==1.10.0",
     "panel-graphic-walker>=0.6.4",
-    "panel-material-ui>=0.12.0",
+    # panel-material-ui llega como dependencia de panel>=1.10 (>=0.16.6,<0.17)
     "papermill>=2.6.0",
     "psycopg[binary]>=3.3.6",
     "pydantic>=2.13.4",

@@ -2,8 +2,8 @@
 panel_project: "{{ lookup('ansible.builtin.env', 'PANEL_PROJECT', default='zabik') }}"
 panel_prefix: "{{ lookup('ansible.builtin.env', 'PANEL_IMAGE_PREFIX', default='zabik') }}"
 # Mantener sincronizado con `version` en pyproject.toml (ver AGENTS.md > Versionado)
-panel_app_version: "1.1.0"
-panel_panel_version: "1.9.4"
+panel_app_version: "1.2.0"
+panel_panel_version: "1.10.0"
 panel_python_version: "3.13"
 panel_docker_image: >-
   {{ panel_prefix }}/panel:{{ panel_app_version }}-panel-{{ panel_panel_version }}-python-{{ panel_python_version }}

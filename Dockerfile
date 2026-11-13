@@ -44,7 +44,6 @@ RUN apt-get update && apt-get install -y locales \
 WORKDIR /app
 
 COPY . /app/
-#RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 RUN uv sync --locked --compile-bytecode
 
 VOLUME /app/config
