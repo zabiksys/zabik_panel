@@ -198,7 +198,7 @@ ejecución, así que no hace falta tocar código para cambiarla.
 
 - Comments and docs are in Spanish
 - No linter, formatter, or typechecker configured
-- Python 3.13+
+- Python 3.14+
 
 ## Skills de HoloViz (Panel/Param)
 

@@ -7,7 +7,7 @@ y este proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
 
 ## [Unreleased]
 
-## [1.2.0] - 2026-11-13
+## [1.2.0] - 2026-11-16
 
 ### Added
 
@@ -23,6 +23,8 @@ y este proyecto sigue [Versionado Semántico](https://semver.org/lang/es/).
   `panel-material-ui`, que llega como dependencia de Panel 1.10.
 - `devops/inventory/group_vars/all/panel.yml`: versiones de app y Panel
   actualizadas (nuevo tag de imagen).
+- Actualizado Python 3.13 → 3.14 (`requires-python`, `.python-version`,
+  Dockerfile y despliegue); `panel_python_version: "3.14"`.
 
 ### Fixed
 

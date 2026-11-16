@@ -171,7 +171,7 @@ app = App(name=APPLICATION_NAME, get_dwh_dburi=get_dwh_dburi)
   claves libres (`['app', usuario, ...]`).
 - **Textos de UI** con el patrón `_()`/`TRANSLATIONS` y `LOCALE = 'es'`.
 - Comentarios y documentación **en español**.
-- Python 3.13+.
+- Python 3.14+.
 
 ## 6. Scaffolding rápido (recomendado)
 
